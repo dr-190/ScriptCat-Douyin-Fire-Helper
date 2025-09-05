@@ -1,2 +1,253 @@
-# ScriptCat-Douyin-Fire-Helper
-抖音续火花自动发送助手 - 每天自动发送续火消息，保持好友火花不熄灭！
+# ScriptCat-Douyin-Fire-Helper 🔥
+
+抖音续火花自动发送助手 - 每天自动发送续火消息，保持好友火花不熄灭！学生党狂喜！
+
+[![GitHub license](https://img.shields.io/github/license/dr-190/ScriptCat-Douyin-Fire-Helper)](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/blob/main/LICENSE)
+[![Tampermonkey](https://img.shields.io/badge/Tampermonkey-✓-blue)](https://www.tampermonkey.net/)
+[![ScriptCat](https://img.shields.io/badge/ScriptCat-✓-orange)](https://docs.scriptcat.org/)
+[![GitHub stars](https://img.shields.io/github/stars/dr-190/ScriptCat-Douyin-Fire-Helper)](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/stargazers)
+
+## ✨ 功能特性
+
+### 🕒 智能定时发送
+- ⏰ **精准定时**: 支持自定义发送时间（默认 00:01:00）
+- 🔄 **自动重试**: 可配置重试机制，最多重试10次
+- 📅 **每日检测**: 智能判断当日是否已发送，避免重复
+
+### 🎭 丰富消息内容
+- 🤖 **一言API集成**: 自动获取优美句子，支持自定义格式
+- 📝 **TXTAPI支持**: 支持外部API和手动文本两种模式
+- 🎨 **灵活格式**: 自定义消息模板，支持占位符替换
+- 🔄 **随机选择**: 手动模式下支持随机或顺序发送文本
+
+### 🎛️ 人性化控制
+- 🖥️ **可视化面板**: 实时显示状态、倒计时和操作日志
+- ⚙️ **图形化设置**: 友好的设置界面，配置简单直观
+- 📊 **状态监控**: 实时显示一言API和TXTAPI状态
+- 🔔 **桌面通知**: 发送成功时显示系统通知
+
+## 🛠️ 安装使用
+
+### 前提条件
+- 浏览器安装 [Tampermonkey](https://www.tampermonkey.net/) 或 [ScriptCat（推荐）](https://docs.scriptcat.org/) 脚本管理器
+
+### 安装步骤
+1. 在线查看 `[scriptCat-douyin-fire-helper.user.js](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/blob/main/scriptCat-douyin-fire-helper.user.js)` 文件 或 下载 `[scriptCat-douyin-fire-helper.user.js](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/releases/download/v2.6/scriptCat-douyin-fire-helper.user.js)` 文件
+2. 在脚本管理器中点击"添加新脚本"
+3. 将文件内容粘贴到编辑器中保存
+4. 访问 [抖音创作者平台-互动管理-私信管理](https://creator.douyin.com/creator-micro/data/following/chat)
+
+### 快速开始
+1. 打开[抖音创作者平台私信管理页面](https://creator.douyin.com/creator-micro/data/following/chat)
+2. 页面右上角会出现控制面板
+3. 点击"设置"按钮配置发送时间和消息内容
+4. 点击你要续火的用户，进入聊天界面【（一个网页只能单独一个，多个可以尝试多开几个网页再点进其他用户聊天（没做过测试）】
+5. 脚本将在指定时间自动发送续火消息
+
+## 💻 挂脚本
+
+### 云电脑挂机方案
+
+为了实现 24 小时不间断自动发送续火消息，推荐使用**挂机宝（云电脑）**来运行本脚本。
+
+### 推荐挂机平台
+
+| 平台名称 | 特点 | 价格参考 |
+|---------|------|---------|
+| **阿里云/腾讯云轻量服务器** | 稳定可靠，性能强劲 | 约 24-50 元/月 |
+| **各种挂机宝服务商** | 专为挂机优化，价格低廉 | 约 10-30 元/月 |
+
+### 挂机部署步骤
+
+1. **购买云服务器**
+   - 选择 Windows 系统的云电脑（推荐 Windows Server）
+   - 配置建议：1核CPU、1GB内存、20GB硬盘即可
+
+2. **环境配置**
+   ```bash
+   # 安装浏览器（推荐 [百分浏览器](https://www.centbrowser.cn/)）
+   # 安装 [Tampermonkey](https://www.tampermonkey.net/) 或 [ScriptCat](https://docs.scriptcat.org/) 脚本管理器
+   # 登录抖音创作者平台并保持页面打开
+
+## ⚙️ 配置说明
+
+### 基本设置
+- **发送时间**: 设置每天的发送时间（格式: HH:mm:ss）
+- **重试次数**: 发送失败时的最大重试次数（1-10次）
+
+### 一言API设置
+- **启用/禁用**: 是否使用一言API
+- **消息格式**: 自定义显示格式，支持变量：
+  - `{hitokoto}` - 一言内容
+  - `{from}` - 出处
+  - `{from_who}` - 作者
+
+### TXTAPI设置
+- **模式选择**: 
+  - API模式: 从指定URL获取文本内容
+  - 手动模式: 使用自定义文本列表
+- **随机发送**: 手动模式下是否随机选择文本
+- **文本内容**: 每行一个文本，支持换行
+
+## 🔧 技术特性
+
+- **跨平台支持**: 支持 Tampermonkey 和 ScriptCat
+- **本地存储**: 使用GM_setValue保存配置，无需服务器
+- **错误处理**: 完善的错误处理和重试机制
+- **性能优化**: 轻量级设计，不影响页面性能
+
+## 📁 项目结构
+
+ScriptCat-Douyin-Fire-Helper/
+├── scriptCat-douyin-fire-helper.user.js # 主脚本文件
+├── README.md # 项目说明文档
+└── LICENSE # 开源许可证
+
+
+# 🚀 更新日志
+
+## 📋 版本概览
+
+### v2.6 (最新版本)
+- ✅ 默认开启TXTAPI功能
+- ✅ 修复手动模式切换显示问题
+- ✅ 优化设置界面交互体验
+
+### v2.5
+- ✅ 改进一言API格式处理
+- ✅ 修复符号显示问题
+- ✅ 移除模糊效果和字体设置
+
+### v2.4
+- ✅ 添加手动文本随机选择功能
+- ✅ 支持字体自定义
+- ✅ 添加模糊效果优化界面
+
+### v2.0 (重大更新)
+- 🎨 全新UI控制面板设计
+- 📅 添加跳过节假日选项
+- ☁️ 支持云端备份配置
+- 🔧 完全重构代码架构
+
+### v1.9
+- ✨ 支持精确到秒的发送时间设置（HH:mm:ss格式）
+- ✨ 自定义消息中的[API]标记在关闭一言时保持不变
+- ✨ 支持消息内容中的换行符
+- 🗑️ 移除测试发送时间功能
+- 🐛 修复时间比较逻辑，确保秒级精度
+
+### v1.8
+- ✨ 添加API占位符功能（[API]标记）
+- ✨ 增加测试发送时间功能
+- 🐛 修复倒计时计算错误
+- 🐛 优化状态更新和倒计时逻辑
+
+### v1.7
+- ✨ 新增设置面板功能
+- ✨ 支持自定义发送时间
+- ✨ 支持一言API开关
+- ✨ 支持自定义消息内容
+- 🐛 修复操作日志显示问题
+- 🐛 增强ScriptCat兼容性
+
+### v1.6
+- 🎉 集成一言API
+- ✨ 消息格式美化："续火 | [一言内容] —— [出处] [作者]"
+- ⏱️ 添加一言API请求超时处理（1分钟）
+- 📊 增加一言状态显示面板
+- 🔌 使用GM_xmlhttpRequest进行跨域API请求
+- 🔄 优化异步处理逻辑
+
+### v1.5
+- 🔧 将发送时间从06:00改为每日00:01
+- ⏰ 调整所有相关时间判断逻辑
+- 📆 修改倒计时目标时间为00:01
+- 🔍 更新自动发送条件判断逻辑
+
+### v1.4 (ScriptCat兼容版)
+- 🔍 添加ScriptCat环境检测功能
+- 🔧 增强API兼容性处理
+- 📋 添加必要的grant权限(@connect self)
+- ✅ 支持"未发送"状态自动发送功能
+- 📝 优化错误处理和日志记录
+
+### v1.3 (简化版)
+- 🔧 移除查找用户相关代码，直接查找聊天输入框
+- 🔄 添加重置所有配置功能
+- ✨ 简化发送流程，不依赖点击特定用户
+- 💾 增强存储管理功能
+
+### v1.2 (修复版)
+- 🐛 修复发送成功后状态显示不正确的问题
+- 🐛 修复倒计时一直显示00:00:00的问题
+- ⏱️ 添加countdownInterval变量管理倒计时
+- 🔄 优化状态更新逻辑
+- 🛡️ 增强错误处理机制
+
+### v1.1
+- 🔍 添加更精确的元素定位方法
+- 🔄 防止重复发送消息的机制
+- 👀 优化DOM变化监听机制
+- 🔁 添加发送失败重试机制（最多3次）
+- 📝 增强错误处理和日志记录
+
+### v1.0 (初始版本)
+- 🎉 基础自动发送功能实现
+- ⏰ 每天06:00自动发送"续火"消息
+- 💾 使用本地存储记录发送状态
+- 🎛️ 可视化控制面板
+- 📋 操作日志记录功能
+- 🖱️ 支持手动操作和清空记录
+
+## 🤝 贡献指南
+
+欢迎提交 Issue 和 Pull Request！
+
+1. Fork 本仓库
+2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 开启 Pull Request
+
+## 📜 开源协议
+
+本项目采用 MIT 协议 - 查看 [LICENSE](LICENSE) 文件了解详情
+
+## ⚠️ 注意事项
+
+- 请合理使用，避免频繁发送消息
+- 本脚本仅用于学习交流目的
+- 使用前请确保遵守抖音平台规则
+- 开发者不对滥用造成的后果负责
+
+## ❓ 常见问题
+
+**Q: 脚本无法正常工作时怎么办？**  
+A: 请检查控制台错误信息，或提交Issue描述具体问题。
+
+**Q: 如何修改发送时间？**  
+A: 点击控制面板的"设置"按钮，在发送时间字段中输入新的时间。
+
+**Q: 支持多个抖音账号吗？**   
+A: 每个浏览器实例只能运行一个脚本实例，多账号需要使用不同浏览器或配置文件。
+
+## 🤖 AI 声明
+
+**重要声明**: 本脚本由 AI 辅助开发完成。虽然经过多次测试和优化，但仍可能存在未发现的 bug 或兼容性问题。
+
+### 开发背景
+- 🔧 **AI 辅助开发**: 本项目的主要代码逻辑和功能实现由 AI 生成
+- 👨‍💻 **人工优化**: 经过开发者多次测试、调试和功能优化
+- 🧪 **持续改进**: 欢迎用户反馈使用中的问题，共同完善脚本
+
+## 🌟 致谢
+
+感谢以下项目的支持：
+- [一言API](https://hitokoto.cn/) - 提供优美的句子
+- [Tampermonkey](https://www.tampermonkey.net/) - 强大的用户脚本管理器
+- [ScriptCat](https://docs.scriptcat.org/) - 优秀的脚本管理器
+- [DeepSeek](https://www.deepseek.com/) - 提供AI辅助开发支持
+
+---
+
+⭐ 如果这个项目对您有帮助，请给它一个 Star！您的支持是我持续更新的动力。
