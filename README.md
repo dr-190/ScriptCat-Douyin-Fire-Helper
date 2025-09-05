@@ -64,7 +64,6 @@
    - 配置建议：1核CPU、1GB内存、20GB硬盘即可
 
 2. **环境配置**
-   ```bash
    # 安装浏览器（推荐 [百分浏览器](https://www.centbrowser.cn/)）
    # 安装 [Tampermonkey](https://www.tampermonkey.net/) 或 [ScriptCat](https://docs.scriptcat.org/) 脚本管理器
    # 登录抖音创作者平台并保持页面打开
