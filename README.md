@@ -43,6 +43,7 @@
 3. 点击"设置"按钮配置发送时间和消息内容
 4. 点击你要续火的用户，进入聊天界面【（一个网页只能单独一个，多个可以尝试多开几个网页再点进其他用户聊天（没做过测试）】
 5. 脚本将在指定时间自动发送续火消息
+6. **重点：浏览器设置(Chrome为例) > 性能 > 始终让以下网站保持活跃状态 > 添加 > 手动添加网站 > 网站填写 'creator.douyin.com' > 添加**
 
 ## 💻 挂脚本
 
@@ -64,9 +65,10 @@
    - 配置建议：1核CPU、1GB内存、20GB硬盘即可
 
 2. **环境配置**
-   # 安装浏览器（推荐 [百分浏览器](https://www.centbrowser.cn/)）
-   # 安装 [Tampermonkey](https://www.tampermonkey.net/) 或 [ScriptCat](https://docs.scriptcat.org/) 脚本管理器
-   # 登录抖音创作者平台并保持页面打开
+   - 安装浏览器（推荐 [百分浏览器](https://www.centbrowser.cn/)）
+   - 安装 [Tampermonkey](https://www.tampermonkey.net/) 或 [ScriptCat](https://docs.scriptcat.org/) 脚本管理器
+   - 登录抖音创作者平台并保持页面打开
+   - **重点：浏览器设置 > 性能 > 始终让以下网站保持活跃状态 > 添加 > 手动添加网站 > 网站填写 'creator.douyin.com' > 添加**
 
 ## ⚙️ 配置说明
 
