@@ -32,7 +32,7 @@
 - 浏览器安装 [ScriptCat（推荐）](https://docs.scriptcat.org/) 或 [Tampermonkey](https://www.tampermonkey.net/) 脚本管理器
 
 ### 安装步骤
-1. 在线查看 [scriptCat-douyin-fire-helper.user.js](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/blob/main/scriptCat-douyin-fire-helper.user.js) 文件 或 下载 [scriptCat-douyin-fire-helper.user.js](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/releases/download/v2.6/scriptCat-douyin-fire-helper.user.js) 文件
+1. 在线查看 [scriptCat-douyin-fire-helper.user.js](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/blob/main/scriptcat-douyin-fire-helper.user.js) 文件 或 下载 [scriptCat-douyin-fire-helper.user.js](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/releases/download/v2.6/scriptcat-douyin-fire-helper.user.js) 文件
 2. 在脚本管理器中点击"添加新脚本"
 3. 将文件内容粘贴到编辑器中保存
 - **已经安装ScriptCat或Tampermonkey的点击 > [快速安装](https://scriptcat.org/scripts/code/4141/%E6%8A%96%E9%9F%B3%E7%BB%AD%E7%81%AB%E8%8A%B1%E8%87%AA%E5%8A%A8%E5%8F%91%E9%80%81%E5%8A%A9%E6%89%8B-%E9%9B%86%E6%88%90%E4%B8%80%E8%A8%80API%E5%92%8CTXTAPI.user.js)**
