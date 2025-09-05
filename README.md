@@ -32,7 +32,7 @@
 - 浏览器安装 [Tampermonkey](https://www.tampermonkey.net/) 或 [ScriptCat（推荐）](https://docs.scriptcat.org/) 脚本管理器
 
 ### 安装步骤
-1. 在线查看 `[scriptCat-douyin-fire-helper.user.js](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/blob/main/scriptCat-douyin-fire-helper.user.js)` 文件 或 下载 `[scriptCat-douyin-fire-helper.user.js](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/releases/download/v2.6/scriptCat-douyin-fire-helper.user.js)` 文件
+1. 在线查看 [scriptCat-douyin-fire-helper.user.js](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/blob/main/scriptCat-douyin-fire-helper.user.js) 文件 或 下载 [scriptCat-douyin-fire-helper.user.js](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/releases/download/v2.6/scriptCat-douyin-fire-helper.user.js) 文件
 2. 在脚本管理器中点击"添加新脚本"
 3. 将文件内容粘贴到编辑器中保存
 4. 访问 [抖音创作者平台-互动管理-私信管理](https://creator.douyin.com/creator-micro/data/following/chat)
