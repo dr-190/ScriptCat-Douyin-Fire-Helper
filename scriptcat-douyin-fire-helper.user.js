@@ -33,13 +33,13 @@
         useTxtApi: true, // 默认开启TXTAPI
         txtApiMode: "manual", // 默认手动模式
         txtApiManualRandom: true, // 手动模式是否随机选择
-        customMessage: "---------------每日消息---------------\n\n[TXTAPI]\n\\n---------------每日一言---------------\n\n[API]\n",
-        hitokotoFormat: "{hitokoto}\n------ {from}{from_who}",
+        customMessage: "—————每日续火—————\n\n[TXTAPI]\n\n—————每日一言—————\n\n[API]\n",
+        hitokotoFormat: "{hitokoto}\n—— {from}{from_who}",
         fromFormat: "{from}",
         fromWhoFormat: "「{from_who}」",
         txtApiUrl: "https://v1.hitokoto.cn/?encode=text",
         txtApiManualText: "文本1\n文本2\n文本3",
-        targetUsername: "请修改此处为目标用户名", // 新增：目标用户名
+        targetUsername: "请修改此处为续火目标用户名", // 新增：目标用户名
         maxLogCount: 200 // 最大日志数量
     };
 
