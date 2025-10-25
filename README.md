@@ -52,15 +52,15 @@
 <div align="center">
 
 ### 🎛️ 控制面板
-![控制面板](./images/screenshot-panel.png)<br>
+![控制面板](https://raw.githubusercontent.com/dr-190/ScriptCat-Douyin-Fire-Helper/main/images/screenshot-panel.png)<br>
 *实时显示脚本状态、倒计时和操作日志的控制面板*
 
 ### ⚙️ 设置界面  
-![设置界面](./images/screenshot-settings.png)<br>
+![设置界面](https://raw.githubusercontent.com/dr-190/ScriptCat-Douyin-Fire-Helper/main/images/screenshot-settings.png)<br>
 *功能丰富的设置面板，支持目标用户查找和性能调优*
 
 ### 📊 历史日志
-![历史日志](./images/screenshot-logs.png)<br>
+![历史日志](https://raw.githubusercontent.com/dr-190/ScriptCat-Douyin-Fire-Helper/main/images/screenshot-logs.png)<br>
 *完整的历史日志记录，支持查看、导出和清空*
 
 ### 🎯 运行流程
