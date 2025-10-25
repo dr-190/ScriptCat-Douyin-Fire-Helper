@@ -47,6 +47,42 @@
 - **内存管理**: 及时清理观察器，防止内存泄漏
 - **超时机制**: 所有操作都有超时控制，避免无限等待
 
+## 📸 界面展示
+
+<div align="center">
+
+### 🎛️ 控制面板
+![控制面板](./images/screenshot-panel.png)<br>
+*实时显示脚本状态、倒计时和操作日志的控制面板*
+
+### ⚙️ 设置界面  
+![设置界面](./images/screenshot-settings.png)<br>
+*功能丰富的设置面板，支持目标用户查找和性能调优*
+
+### 📊 历史日志
+![历史日志](./images/screenshot-logs.png)<br>
+*完整的历史日志记录，支持查看、导出和清空*
+
+### 🎯 运行流程
+```mermaid
+graph TD
+    A[打开抖音创作者平台] --> B[脚本自动加载]
+    B --> C[显示控制面板]
+    C --> D{启用目标用户查找?}
+    D -->|是| E[自动查找目标用户]
+    D -->|否| F[手动进入聊天界面]
+    E --> G[点击目标用户]
+    G --> H[等待页面加载]
+    H --> I[查找聊天输入框]
+    F --> I
+    I --> J[准备消息内容]
+    J --> K[发送续火消息]
+    K --> L[记录发送状态]
+    L --> M[显示成功通知]
+```
+
+</div>
+
 ## 🛠️ 安装使用
 
 ### 前提条件
@@ -178,7 +214,7 @@
 ScriptCat-Douyin-Fire-Helper/
 ├── scriptcat-douyin-fire-helper.user.js  # 主脚本文件
 ├── README.md                             # 项目说明文档
-└── LICENSE                              # 开源许可证
+├── LICENSE                              # 开源许可证
 └── images/                              # 项目图片资源
     ├── screenshot-panel.png             # 控制面板截图
     ├── screenshot-settings.png          # 设置界面截图
