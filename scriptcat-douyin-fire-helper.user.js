@@ -394,8 +394,9 @@
             const reopenBtn = document.getElementById('dy-fire-reopen-btn');
             if (reopenBtn) {
                 reopenBtn.style.display = 'flex';
-                }
+            }
         });
+        
         document.getElementById('dy-fire-send').addEventListener('click', sendMessage);
         document.getElementById('dy-fire-settings').addEventListener('click', showSettingsPanel);
         document.getElementById('dy-fire-history').addEventListener('click', showHistoryPanel);
@@ -408,6 +409,12 @@
 
     // 创建重新打开面板的按钮
     function createReopenButton() {
+        // 移除已存在的按钮
+        const existingBtn = document.getElementById('dy-fire-reopen-btn');
+        if (existingBtn) {
+            existingBtn.remove();
+        }
+
         const reopenBtn = document.createElement('div');
         reopenBtn.id = 'dy-fire-reopen-btn';
         reopenBtn.style.cssText = `
@@ -427,10 +434,22 @@
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
             font-size: 18px;
             font-weight: bold;
+            transition: all 0.3s ease;
         `;
         reopenBtn.innerHTML = '🔥';
         reopenBtn.title = '打开续火助手面板';
-    
+
+        // 添加悬停效果
+        reopenBtn.addEventListener('mouseenter', function() {
+            this.style.transform = 'scale(1.1)';
+            this.style.boxShadow = '0 4px 15px rgba(255, 44, 84, 0.4)';
+        });
+        
+        reopenBtn.addEventListener('mouseleave', function() {
+            this.style.transform = 'scale(1)';
+            this.style.boxShadow = '0 2px 10px rgba(0, 0, 0, 0.2)';
+        });
+
         reopenBtn.addEventListener('click', function() {
             const panel = document.getElementById('dy-fire-helper');
             if (panel) {
@@ -1782,7 +1801,7 @@
         }
     }
 
-    // 初始化函数
+    // 在初始化函数中确保按钮状态正确
     function init() {
         isScriptCat = detectScriptCat();
         initConfig();
@@ -1801,11 +1820,24 @@
        
         updateStatus(isSentToday);
         updateUserStatusDisplay();
+
+        // 确保重新打开按钮初始状态正确
+        const reopenBtn = document.getElementById('dy-fire-reopen-btn');
+        if (reopenBtn) {
+            reopenBtn.style.display = 'none';
+        }
        
         if (typeof GM_registerMenuCommand !== 'undefined') {
             try {
                 GM_registerMenuCommand('抖音续火助手-显示面板', function() {
-                    document.getElementById('dy-fire-helper').style.display = 'block';
+                    const panel = document.getElementById('dy-fire-helper');
+                    const reopenBtn = document.getElementById('dy-fire-reopen-btn');
+                    if (panel) {
+                        panel.style.display = 'block';
+                        if (reopenBtn) {
+                            reopenBtn.style.display = 'none';
+                        }
+                    }
                 });
                 GM_registerMenuCommand('立即发送续火消息', sendMessage);
                 GM_registerMenuCommand('设置', showSettingsPanel);
