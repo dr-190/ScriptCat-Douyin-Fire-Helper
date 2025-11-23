@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         抖音续火花自动发送助手-集成一言API和TXTAPI-支持多用户
 // @namespace    http://tampermonkey.net/
-// @version      2.1
+// @version      2.1.1
 // @description  每天自动发送续火消息，支持自定义时间，集成一言API和TXTAPI，支持多目标用户
-// @author       飔梦 / 阚泥
+// @author       飔梦 / 阚泥 / xiaohe123awa
 // @match        https://creator.douyin.com/creator-micro/data/following/chat
 // @icon         https://free.picui.cn/free/2025/11/23/69226264aca4e.png
 // @grant        GM_setValue
@@ -386,8 +386,15 @@
 
         document.body.appendChild(panel);
 
+        // 添加重新打开面板的悬浮按钮
+        createReopenButton();
+
         document.getElementById('dy-fire-helper-close').addEventListener('click', function() {
             panel.style.display = 'none';
+            const reopenBtn = document.getElementById('dy-fire-reopen-btn');
+            if (reopenBtn) {
+                reopenBtn.style.display = 'flex';
+                }
         });
         document.getElementById('dy-fire-send').addEventListener('click', sendMessage);
         document.getElementById('dy-fire-settings').addEventListener('click', showSettingsPanel);
@@ -397,6 +404,46 @@
         document.getElementById('dy-fire-reset-users').addEventListener('click', resetTodaySentUsers);
         
         updateUserStatusDisplay();
+    }
+
+    // 创建重新打开面板的按钮
+    function createReopenButton() {
+        const reopenBtn = document.createElement('div');
+        reopenBtn.id = 'dy-fire-reopen-btn';
+        reopenBtn.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 40px;
+            height: 40px;
+            background: #ff2c54;
+            border-radius: 50%;
+            color: white;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            z-index: 9998;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+            font-size: 18px;
+            font-weight: bold;
+        `;
+        reopenBtn.innerHTML = '🔥';
+        reopenBtn.title = '打开续火助手面板';
+    
+        reopenBtn.addEventListener('click', function() {
+            const panel = document.getElementById('dy-fire-helper');
+            if (panel) {
+                panel.style.display = 'block';
+                reopenBtn.style.display = 'none';
+            } else {
+                // 如果面板被完全移除，重新创建
+                createControlPanel();
+                reopenBtn.style.display = 'none';
+            }
+        });
+        
+        document.body.appendChild(reopenBtn);
     }
 
     // 更新用户状态显示（兼容旧函数）
