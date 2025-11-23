@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         抖音续火花自动发送助手-集成一言API和TXTAPI-支持多用户
 // @namespace    http://tampermonkey.net/
-// @version      2.1.2
+// @version      2.1.1
 // @description  每天自动发送续火消息，支持自定义时间，集成一言API和TXTAPI，支持多目标用户
 // @author       飔梦 / 阚泥 / xiaohe123awa
 // @match        https://creator.douyin.com/creator-micro/data/following/chat
+// @icon         https://free.picui.cn/free/2025/11/23/69226264aca4e.png
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
@@ -404,7 +405,6 @@
         
         updateUserStatusDisplay();
     }
-
 
     // 创建重新打开面板的按钮
     function createReopenButton() {
