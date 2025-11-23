@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         抖音续火花自动发送助手-集成一言API和TXTAPI-支持多用户
 // @namespace    http://tampermonkey.net/
-// @version      2.1.1
+// @version      2.2
 // @description  每天自动发送续火消息，支持自定义时间，集成一言API和TXTAPI，支持多目标用户
 // @author       飔梦 / 阚泥 / xiaohe123awa
 // @match        https://creator.douyin.com/creator-micro/data/following/chat
@@ -48,8 +48,8 @@
         clickMethod: "direct",
         pageLoadWaitTime: 5000,
         chatInputCheckInterval: 1000,
-        multiUserMode: "sequential", // sequential: 顺序发送, random: 随机发送
-        multiUserRetrySame: false // 重试时是否使用同一用户
+        multiUserMode: "sequential",
+        multiUserRetrySame: false
     };
 
     // 状态变量
@@ -70,6 +70,14 @@
     let currentUserIndex = -1;
     let sentUsersToday = [];
     let allTargetUsers = [];
+
+    // 拖动相关变量
+    let isDragging = false;
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
+    let currentPanel = null;
+
+    // ==================== 核心功能函数 ====================
 
     // 检测是否是ScriptCat
     function detectScriptCat() {
@@ -121,7 +129,6 @@
             return;
         }
         
-        // 支持逗号、竖线、换行符分隔
         const rawText = userConfig.targetUsernames.trim();
         allTargetUsers = rawText.split(/[,|\n]/)
             .map(user => user.trim())
@@ -136,7 +143,6 @@
             return null;
         }
         
-        // 获取今天还未发送的用户
         const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
         
         if (unsentUsers.length === 0) {
@@ -147,16 +153,13 @@
         let nextUser;
         
         if (userConfig.multiUserMode === 'random') {
-            // 随机模式
             const randomIndex = Math.floor(Math.random() * unsentUsers.length);
             nextUser = unsentUsers[randomIndex];
         } else {
-            // 顺序模式
             if (currentUserIndex < 0 || currentUserIndex >= allTargetUsers.length) {
                 currentUserIndex = 0;
             }
             
-            // 找到下一个未发送的用户
             let found = false;
             for (let i = 0; i < allTargetUsers.length; i++) {
                 const index = (currentUserIndex + i) % allTargetUsers.length;
@@ -184,7 +187,6 @@
             GM_setValue('sentUsersToday', sentUsersToday);
         }
         
-        // 更新当前用户索引
         const index = allTargetUsers.indexOf(username);
         if (index !== -1) {
             currentUserIndex = (index + 1) % allTargetUsers.length;
@@ -192,47 +194,6 @@
         }
         
         addHistoryLog(`用户 ${username} 已标记为今日已发送`, 'success');
-        updateUserStatusDisplay();
-    }
-
-    // 更新用户状态显示
-    function updateUserStatusDisplay() {
-        const statusEl = document.getElementById('dy-fire-user-status');
-        const progressEl = document.getElementById('dy-fire-user-progress');
-        
-        if (!userConfig.enableTargetUser || allTargetUsers.length === 0) {
-            statusEl.textContent = '未启用';
-            statusEl.style.color = '#6c757d';
-            if (progressEl) {
-                progressEl.textContent = '';
-            }
-            return;
-        }
-        
-        const sentCount = sentUsersToday.length;
-        const totalCount = allTargetUsers.length;
-        const progressText = `${sentCount}/${totalCount}`;
-        
-        if (progressEl) {
-            progressEl.textContent = progressText;
-        }
-        
-        if (sentCount >= totalCount) {
-            statusEl.textContent = '全部完成';
-            statusEl.style.color = '#28a745';
-        } else {
-            statusEl.textContent = `进行中 ${progressText}`;
-            statusEl.style.color = '#007bff';
-        }
-    }
-
-    // 重置今日发送记录
-    function resetTodaySentUsers() {
-        sentUsersToday = [];
-        GM_setValue('sentUsersToday', []);
-        currentUserIndex = -1;
-        GM_setValue('currentUserIndex', -1);
-        addHistoryLog('今日发送记录已重置', 'info');
         updateUserStatusDisplay();
     }
 
@@ -292,638 +253,52 @@
         addHistoryLog('日志已导出', 'success');
     }
 
-    // 创建UI控制面板
-    function createControlPanel() {
-        const existingPanel = document.getElementById('dy-fire-helper');
-        if (existingPanel) {
-            existingPanel.remove();
-        }
-
-        const panel = document.createElement('div');
-        panel.id = 'dy-fire-helper';
-        panel.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            width: 450px;
-            background: rgba(255, 255, 255, 0.98);
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
-            z-index: 9999;
-            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
-            padding: 15px;
-            color: #333;
-            transition: all 0.3s ease;
-            max-height: 600px;
-            overflow: hidden;
-            border: 1px solid #eee;
-        `;
-
-        panel.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h3 style="margin: 0; color: #ff2c54; font-size: 16px; display: flex; align-items: center;">
-                    <span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: #28a745; margin-right: 8px;"></span>
-                    抖音续火助手 ${isScriptCat ? '(ScriptCat)' : ''}
-                </h3>
-                <button id="dy-fire-helper-close" style="background: none; border: none; font-size: 20px; cursor: pointer; color: #999;">×</button>
-            </div>
-           
-            <div style="margin-bottom: 15px;">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                    <span style="font-weight: 500;">今日状态:</span>
-                    <span id="dy-fire-status" style="color: #28a745; font-weight: 600;">已发送</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                    <span style="font-weight: 500;">用户状态:</span>
-                    <span id="dy-fire-user-status" style="color: #6c757d; font-weight: 600;">未启用</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                    <span style="font-weight: 500;">发送进度:</span>
-                    <span id="dy-fire-user-progress" style="color: #007bff; font-weight: 600;"></span>
-                </div>
-                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                    <span style="font-weight: 500;">下次发送:</span>
-                    <span id="dy-fire-next">2023-11-05 00:01:00</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                    <span style="font-weight: 500;">倒计时:</span>
-                    <span id="dy-fire-countdown" style="color: #dc3545; font-weight: 700;">23:45:12</span>
-                </div>
-                <div style="display: flex; justify-content: space-between;">
-                    <span style="font-weight: 500;">重试次数:</span>
-                    <span id="dy-fire-retry">0/${userConfig.maxRetryCount}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; margin-top: 8px;">
-                    <span style="font-weight: 500;">一言状态:</span>
-                    <span id="dy-fire-hitokoto">未获取</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; margin-top: 8px;">
-                    <span style="font-weight: 500;">TXTAPI状态:</span>
-                    <span id="dy-fire-txtapi">未获取</span>
-                </div>
-            </div>
-           
-            <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px;">
-                <button id="dy-fire-send" style="padding: 8px 12px; background: #007bff; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">立即发送续火消息</button>
-                <div style="display: flex; gap: 10px;">
-                    <button id="dy-fire-settings" style="flex: 1; padding: 8px 12px; background: #6c757d; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">设置</button>
-                    <button id="dy-fire-history" style="flex: 1; padding: 8px 12px; background: #17a2b8; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">历史日志</button>
-                </div>
-                <div style="display: flex; gap: 10px;">
-                    <button id="dy-fire-clear" style="flex: 1; padding: 8px 12px; background: #dc3545; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">清空记录</button>
-                    <button id="dy-fire-reset" style="flex: 1; padding: 8px 12px; background: #ffc107; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">重置配置</button>
-                </div>
-                <button id="dy-fire-reset-users" style="padding: 8px 12px; background: #6f42c1; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500;">重置今日发送记录</button>
-            </div>
-           
-            <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 10px;">
-                <div style="font-weight: 500; margin-bottom: 8px;">操作日志</div>
-                <div id="dy-fire-log" style="font-size: 12px; height: 120px; overflow-y: auto; line-height: 1.4;">
-                    <div style="color: #28a745;">系统已就绪，等待执行...</div>
-                </div>
-            </div>
-        `;
-
-        document.body.appendChild(panel);
-
-        // 添加重新打开面板的悬浮按钮
-        createReopenButton();
-
-        document.getElementById('dy-fire-helper-close').addEventListener('click', function() {
-            panel.style.display = 'none';
-            const reopenBtn = document.getElementById('dy-fire-reopen-btn');
-            if (reopenBtn) {
-                reopenBtn.style.display = 'flex';
-            }
-        });
-        
-        document.getElementById('dy-fire-send').addEventListener('click', sendMessage);
-        document.getElementById('dy-fire-settings').addEventListener('click', showSettingsPanel);
-        document.getElementById('dy-fire-history').addEventListener('click', showHistoryPanel);
-        document.getElementById('dy-fire-clear').addEventListener('click', clearData);
-        document.getElementById('dy-fire-reset').addEventListener('click', resetAllConfig);
-        document.getElementById('dy-fire-reset-users').addEventListener('click', resetTodaySentUsers);
-        
-        updateUserStatusDisplay();
-    }
-
-    // 创建重新打开面板的按钮
-    function createReopenButton() {
-        // 移除已存在的按钮
-        const existingBtn = document.getElementById('dy-fire-reopen-btn');
-        if (existingBtn) {
-            existingBtn.remove();
-        }
-
-        const reopenBtn = document.createElement('div');
-        reopenBtn.id = 'dy-fire-reopen-btn';
-        reopenBtn.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            width: 40px;
-            height: 40px;
-            background: #ff2c54;
-            border-radius: 50%;
-            color: white;
-            display: none;
-            justify-content: center;
-            align-items: center;
-            cursor: pointer;
-            z-index: 9998;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-            font-size: 18px;
-            font-weight: bold;
-            transition: all 0.3s ease;
-        `;
-        reopenBtn.innerHTML = '🔥';
-        reopenBtn.title = '打开续火助手面板';
-
-        // 添加悬停效果
-        reopenBtn.addEventListener('mouseenter', function() {
-            this.style.transform = 'scale(1.1)';
-            this.style.boxShadow = '0 4px 15px rgba(255, 44, 84, 0.4)';
-        });
-        
-        reopenBtn.addEventListener('mouseleave', function() {
-            this.style.transform = 'scale(1)';
-            this.style.boxShadow = '0 2px 10px rgba(0, 0, 0, 0.2)';
-        });
-
-        reopenBtn.addEventListener('click', function() {
-            const panel = document.getElementById('dy-fire-helper');
-            if (panel) {
-                panel.style.display = 'block';
-                reopenBtn.style.display = 'none';
-            } else {
-                // 如果面板被完全移除，重新创建
-                createControlPanel();
-                reopenBtn.style.display = 'none';
-            }
-        });
-        
-        document.body.appendChild(reopenBtn);
-    }
-
-    // 更新用户状态显示（兼容旧函数）
-    function updateUserStatus(status, isSuccess = null) {
-        const statusEl = document.getElementById('dy-fire-user-status');
-        if (status) {
-            statusEl.textContent = status;
-        }
-        
-        if (isSuccess === true) {
-            statusEl.style.color = '#28a745';
-        } else if (isSuccess === false) {
-            statusEl.style.color = '#dc3545';
-        } else {
-            statusEl.style.color = '#6c757d';
-        }
-    }
-
-    // 显示历史日志面板
-    function showHistoryPanel() {
-        const existingPanel = document.getElementById('dy-fire-history-panel');
-        if (existingPanel) {
-            existingPanel.remove();
-            return;
-        }
-
-        const historyPanel = document.createElement('div');
-        historyPanel.id = 'dy-fire-history-panel';
-        historyPanel.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            max-width: 90vw;
-            width: 700px;
-            height: 500px;
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 5px 25px rgba(0, 0, 0, 0.2);
-            z-index: 10000;
-            padding: 20px;
-            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
-            display: flex;
-            flex-direction: column;
-            box-sizing: border-box;
-        `;
-
-        const logs = getHistoryLogs();
-        const logItems = logs.map(log => `
-            <div style="padding: 5px 0; border-bottom: 1px solid #f0f0f0;">
-                <div style="font-size: 11px; color: #666;">
-                    ${new Date(log.timestamp).toLocaleString()}
-                    <span style="margin-left: 10px; padding: 2px 6px; border-radius: 3px; font-size: 10px; 
-                         background: ${log.type === 'success' ? '#d4edda' : log.type === 'error' ? '#f8d7da' : '#d1ecf1'}; 
-                         color: ${log.type === 'success' ? '#155724' : log.type === 'error' ? '#721c24' : '#0c5460'}">
-                        ${log.type.toUpperCase()}
-                    </span>
-                </div>
-                <div style="font-size: 12px; margin-top: 2px;">${log.message}</div>
-            </div>
-        `).join('');
-
-        historyPanel.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                <h3 style="margin: 0; color: #ff2c54;">历史日志 (${logs.length}/${userConfig.maxHistoryLogs})</h3>
-                <button id="dy-fire-history-close" style="background: none; border: none; font-size: 20px; cursor: pointer; color: #999;">×</button>
-            </div>
-            <div style="flex: 1; overflow-y: auto; margin-bottom: 15px; border: 1px solid #eee; border-radius: 6px; padding: 10px;">
-                ${logs.length > 0 ? logItems : '<div style="text-align: center; color: #666; padding: 20px;">暂无日志记录</div>'}
-            </div>
-            <div style="display: flex; gap: 10px;">
-                <button id="dy-fire-history-export" style="flex: 1; padding: 10px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer;">导出日志</button>
-                <button id="dy-fire-history-clear" style="flex: 1; padding: 10px; background: #dc3545; color: white; border: none; border-radius: 6px; cursor: pointer;">清空日志</button>
-            </div>
-        `;
-
-        document.body.appendChild(historyPanel);
-
-        document.getElementById('dy-fire-history-close').addEventListener('click', function() {
-            historyPanel.remove();
-        });
-        document.getElementById('dy-fire-history-export').addEventListener('click', exportHistoryLogs);
-        document.getElementById('dy-fire-history-clear').addEventListener('click', clearHistoryLogs);
-    }
-
-    // 显示设置面板
-    function showSettingsPanel() {
-        const existingSettings = document.getElementById('dy-fire-settings-panel');
-        if (existingSettings) {
-            existingSettings.remove();
-            return;
-        }
-
-        const settingsPanel = document.createElement('div');
-        settingsPanel.id = 'dy-fire-settings-panel';
-        settingsPanel.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            max-width: 90vw;
-            width: 500px;
-            max-height: 80vh;
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 5px 25px rgba(0, 0, 0, 0.2);
-            z-index: 10000;
-            padding: 20px;
-            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
-            overflow-y: auto;
-            box-sizing: border-box;
-        `;
-
-        settingsPanel.innerHTML = `
-            <h3 style="margin: 0 0 20px 0; color: #ff2c54; display: flex; justify-content: space-between; align-items: center;">
-                <span>设置</span>
-                <button id="dy-fire-settings-close" style="background: none; border: none; font-size: 20px; cursor: pointer; color: #999;">×</button>
-            </h3>
-           
-            <div style="margin-bottom: 15px;">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">发送时间 (HH:mm:ss)</label>
-                <input type="text" id="dy-fire-settings-time" value="${userConfig.sendTime}" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;" placeholder="例如: 00:01:00">
-            </div>
-
-            <div style="margin-bottom: 15px;">
-                <label style="display: flex; align-items: center; cursor: pointer;">
-                    <input type="checkbox" id="dy-fire-settings-enable-target" ${userConfig.enableTargetUser ? 'checked' : ''} style="margin-right: 8px;">
-                    启用目标用户查找
-                </label>
-            </div>
-
-            <div id="target-user-container" style="margin-bottom: 15px; ${userConfig.enableTargetUser ? '' : 'display: none;'}">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">目标用户名（多个用户用逗号、竖线或换行分隔）</label>
-                <textarea id="dy-fire-settings-target-user" style="width: 100%; height: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; resize: vertical; box-sizing: border-box;" placeholder="例如: 用户1, 用户2 | 用户3&#10;用户4">${userConfig.targetUsernames}</textarea>
-                <div style="font-size: 12px; color: #666; margin-top: 5px;">启用后会自动在聊天列表中查找指定用户并点击</div>
-                
-                <div style="margin-top: 10px;">
-                    <label style="display: block; margin-bottom: 5px; font-weight: 500;">多用户发送模式</label>
-                    <div style="display: flex; gap: 15px;">
-                        <label style="display: flex; align-items: center; cursor: pointer;">
-                            <input type="radio" name="multi-user-mode" value="sequential" ${userConfig.multiUserMode === 'sequential' ? 'checked' : ''} style="margin-right: 5px;">
-                            顺序发送
-                        </label>
-                        <label style="display: flex; align-items: center; cursor: pointer;">
-                            <input type="radio" name="multi-user-mode" value="random" ${userConfig.multiUserMode === 'random' ? 'checked' : ''} style="margin-right: 5px;">
-                            随机发送
-                        </label>
-                    </div>
-                </div>
-                
-                <div style="margin-top: 10px;">
-                    <label style="display: flex; align-items: center; cursor: pointer;">
-                        <input type="checkbox" id="dy-fire-settings-multi-retry-same" ${userConfig.multiUserRetrySame ? 'checked' : ''} style="margin-right: 8px;">
-                        重试时使用同一用户
-                    </label>
-                    <div style="font-size: 12px; color: #666; margin-top: 5px;">启用后重试时会继续发送给同一用户，否则会切换到下一用户</div>
-                </div>
-            </div>
-
-            <div style="margin-bottom: 15px;">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">点击方法</label>
-                <div style="display: flex; gap: 15px;">
-                    <label style="display: flex; align-items: center; cursor: pointer;">
-                        <input type="radio" name="click-method" value="direct" ${userConfig.clickMethod === 'direct' ? 'checked' : ''} style="margin-right: 5px;">
-                        直接点击
-                    </label>
-                    <label style="display: flex; align-items: center; cursor: pointer;">
-                        <input type="radio" name="click-method" value="event" ${userConfig.clickMethod === 'event' ? 'checked' : ''} style="margin-right: 5px;">
-                        事件触发
-                    </label>
-                </div>
-                <div style="font-size: 12px; color: #666; margin-top: 5px;">直接点击更可靠，事件触发更安全</div>
-            </div>
-
-            <div style="margin-bottom: 15px;">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">页面加载等待时间(毫秒)</label>
-                <input type="number" id="dy-fire-settings-page-wait" min="1000" max="15000" value="${userConfig.pageLoadWaitTime}" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;">
-                <div style="font-size: 12px; color: #666; margin-top: 5px;">点击用户后等待页面加载的时间</div>
-            </div>
-           
-            <div style="margin-bottom: 15px;">
-                <label style="display: flex; align-items: center; cursor: pointer;">
-                    <input type="checkbox" id="dy-fire-settings-use-hitokoto" ${userConfig.useHitokoto ? 'checked' : ''} style="margin-right: 8px;">
-                    使用一言API
-                </label>
-            </div>
-           
-            <div style="margin-bottom: 15px;">
-                <label style="display: flex; align-items: center; cursor: pointer;">
-                    <input type="checkbox" id="dy-fire-settings-use-txtapi" ${userConfig.useTxtApi ? 'checked' : ''} style="margin-right: 8px;">
-                    使用TXTAPI
-                </label>
-            </div>
-           
-            <div id="txt-api-mode-container" style="margin-bottom: 15px; ${userConfig.useTxtApi ? '' : 'display: none;'}">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">TXTAPI模式</label>
-                <div style="display: flex; gap: 15px;">
-                    <label style="display: flex; align-items: center; cursor: pointer;">
-                        <input type="radio" name="txt-api-mode" value="api" ${userConfig.txtApiMode === 'api' ? 'checked' : ''} style="margin-right: 5px;">
-                        API模式
-                    </label>
-                    <label style="display: flex; align-items: center; cursor: pointer;">
-                        <input type="radio" name="txt-api-mode" value="manual" ${userConfig.txtApiMode === 'manual' ? 'checked' : ''} style="margin-right: 5px;">
-                        手动模式
-                    </label>
-                </div>
-            </div>
-           
-            <div id="txt-api-url-container" style="margin-bottom: 15px; ${userConfig.useTxtApi && userConfig.txtApiMode === 'api' ? '' : 'display: none;'}">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">TXTAPI链接</label>
-                <input type="text" id="dy-fire-settings-txtapi-url" value="${userConfig.txtApiUrl}" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;" placeholder="例如: https://123.cn">
-            </div>
-           
-            <div id="txt-api-manual-container" style="margin-bottom: 15px; ${userConfig.useTxtApi && userConfig.txtApiMode === 'manual' ? '' : 'display: none;'}">
-                <div style="margin-bottom: 10px;">
-                    <label style="display: flex; align-items: center; cursor: pointer;">
-                        <input type="checkbox" id="dy-fire-settings-txtapi-random" ${userConfig.txtApiManualRandom ? 'checked' : ''} style="margin-right: 8px;">
-                        随机选择文本
-                    </label>
-                </div>
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">手动文本内容（一行一个）</label>
-                <textarea id="dy-fire-settings-txtapi-manual" style="width: 100%; height: 100px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; resize: vertical; box-sizing: border-box;">${userConfig.txtApiManualText}</textarea>
-            </div>
-           
-            <div style="margin-bottom: 15px;">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">最大重试次数</label>
-                <input type="number" id="dy-fire-settings-retry-count" min="1" max="10" value="${userConfig.maxRetryCount}" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;">
-            </div>
-
-            <div style="margin-bottom: 15px;">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">用户查找超时(毫秒)</label>
-                <input type="number" id="dy-fire-settings-user-timeout" min="1000" max="30000" value="${userConfig.userSearchTimeout}" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;">
-            </div>
-
-            <div style="margin-bottom: 15px;">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">最大历史日志数量</label>
-                <input type="number" id="dy-fire-settings-max-logs" min="50" max="1000" value="${userConfig.maxHistoryLogs}" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;">
-            </div>
-
-            <div style="margin-bottom: 15px;">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">查找防抖延迟(毫秒)</label>
-                <input type="number" id="dy-fire-settings-debounce-delay" min="100" max="2000" value="${userConfig.searchDebounceDelay}" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;">
-                <div style="font-size: 12px; color: #666; margin-top: 5px;">降低频繁查找导致的性能消耗</div>
-            </div>
-
-            <div style="margin-bottom: 15px;">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">查找节流延迟(毫秒)</label>
-                <input type="number" id="dy-fire-settings-throttle-delay" min="500" max="3000" value="${userConfig.searchThrottleDelay}" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;">
-                <div style="font-size: 12px; color: #666; margin-top: 5px;">控制查找的最小时间间隔</div>
-            </div>
-           
-            <div style="margin-bottom: 15px;">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">一言API格式</label>
-                <textarea id="dy-fire-settings-hitokoto-format" style="width: 100%; height: 60px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; resize: vertical; box-sizing: border-box;">${userConfig.hitokotoFormat}</textarea>
-                <div style="font-size: 12px; color: #666; margin-top: 5px;">
-                    可用变量: {hitokoto} {from} {from_who}<br>
-                    示例: {hitokoto} —— {from}{from_who}
-                </div>
-            </div>
-           
-            <div style="margin-bottom: 15px;">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">from格式</label>
-                <input type="text" id="dy-fire-settings-from-format" value="${userConfig.fromFormat}" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;" placeholder="例如: {from}">
-                <div style="font-size: 12px; color: #666; margin-top: 5px;">
-                    当from不为空时显示此格式，为空时不显示
-                </div>
-            </div>
-           
-            <div style="margin-bottom: 15px;">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">from_who格式</label>
-                <input type="text" id="dy-fire-settings-from-who-format" value="${userConfig.fromWhoFormat}" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;" placeholder="例如: 「{from_who}」">
-                <div style="font-size: 12px; color: #666; margin-top: 5px;">
-                    当from_who不为空时显示此格式，为空时不显示
-                </div>
-            </div>
-           
-            <div style="margin-bottom: 20px;">
-                <label style="display: block; margin-bottom: 5px; font-weight: 500;">自定义消息内容</label>
-                <textarea id="dy-fire-settings-custom-message" style="width: 100%; height: 100px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; resize: vertical; box-sizing: border-box;">${userConfig.customMessage}</textarea>
-                <div style="font-size: 12px; color: #666; margin-top: 5px;">
-                    使用 [API] 作为一言内容的占位符<br>
-                    使用 [TXTAPI] 作为TXTAPI内容的占位符<br>
-                    支持换行符，关闭API时占位符标记将保留
-                </div>
-            </div>
-           
-            <button id="dy-fire-settings-save" style="width: 100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; box-sizing: border-box;">保存设置</button>
-        `;
-
-        document.body.appendChild(settingsPanel);
-
-        document.getElementById('dy-fire-settings-enable-target').addEventListener('change', function() {
-            document.getElementById('target-user-container').style.display = this.checked ? 'block' : 'none';
-        });
-
-        const modeRadios = document.querySelectorAll('input[name="txt-api-mode"]');
-        modeRadios.forEach(radio => {
-            radio.addEventListener('change', function() {
-                const mode = this.value;
-                document.getElementById('txt-api-url-container').style.display = mode === 'api' ? 'block' : 'none';
-                document.getElementById('txt-api-manual-container').style.display = mode === 'manual' ? 'block' : 'none';
-            });
-        });
-
-        document.getElementById('dy-fire-settings-use-txtapi').addEventListener('change', function() {
-            const useTxtApi = this.checked;
-            document.getElementById('txt-api-mode-container').style.display = useTxtApi ? 'block' : 'none';
-            
-            const currentMode = document.querySelector('input[name="txt-api-mode"]:checked').value;
-            document.getElementById('txt-api-url-container').style.display = (useTxtApi && currentMode === 'api') ? 'block' : 'none';
-            document.getElementById('txt-api-manual-container').style.display = (useTxtApi && currentMode === 'manual') ? 'block' : 'none';
-        });
-
-        document.getElementById('dy-fire-settings-close').addEventListener('click', function() {
-            settingsPanel.remove();
-        });
-
-        document.getElementById('dy-fire-settings-save').addEventListener('click', saveSettings);
-    }
-
-    // 保存设置
-    function saveSettings() {
-        const timeValue = document.getElementById('dy-fire-settings-time').value;
-        const enableTargetUser = document.getElementById('dy-fire-settings-enable-target').checked;
-        const targetUsernames = document.getElementById('dy-fire-settings-target-user').value;
-        const multiUserMode = document.querySelector('input[name="multi-user-mode"]:checked').value;
-        const multiUserRetrySame = document.getElementById('dy-fire-settings-multi-retry-same').checked;
-        const clickMethod = document.querySelector('input[name="click-method"]:checked').value;
-        const pageLoadWaitTime = parseInt(document.getElementById('dy-fire-settings-page-wait').value, 10);
-        const useHitokoto = document.getElementById('dy-fire-settings-use-hitokoto').checked;
-        const useTxtApi = document.getElementById('dy-fire-settings-use-txtapi').checked;
-        const txtApiMode = document.querySelector('input[name="txt-api-mode"]:checked').value;
-        const txtApiRandom = document.getElementById('dy-fire-settings-txtapi-random').checked;
-        const txtApiUrl = document.getElementById('dy-fire-settings-txtapi-url').value;
-        const txtApiManualText = document.getElementById('dy-fire-settings-txtapi-manual').value;
-        const maxRetryCount = parseInt(document.getElementById('dy-fire-settings-retry-count').value, 10);
-        const userSearchTimeout = parseInt(document.getElementById('dy-fire-settings-user-timeout').value, 10);
-        const maxHistoryLogs = parseInt(document.getElementById('dy-fire-settings-max-logs').value, 10);
-        const debounceDelay = parseInt(document.getElementById('dy-fire-settings-debounce-delay').value, 10);
-        const throttleDelay = parseInt(document.getElementById('dy-fire-settings-throttle-delay').value, 10);
-        const hitokotoFormat = document.getElementById('dy-fire-settings-hitokoto-format').value;
-        const fromFormat = document.getElementById('dy-fire-settings-from-format').value;
-        const fromWhoFormat = document.getElementById('dy-fire-settings-from-who-format').value;
-        const customMessage = document.getElementById('dy-fire-settings-custom-message').value;
-       
-        if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/.test(timeValue)) {
-            addHistoryLog('时间格式错误，请使用HH:mm:ss格式', 'error');
-            return;
-        }
-       
-        if (isNaN(maxRetryCount) || maxRetryCount < 1 || maxRetryCount > 10) {
-            addHistoryLog('重试次数必须是1-10之间的数字', 'error');
-            return;
-        }
-
-        if (isNaN(userSearchTimeout) || userSearchTimeout < 1000 || userSearchTimeout > 30000) {
-            addHistoryLog('用户查找超时必须介于1000-30000毫秒之间', 'error');
-            return;
-        }
-
-        if (isNaN(maxHistoryLogs) || maxHistoryLogs < 50 || maxHistoryLogs > 1000) {
-            addHistoryLog('最大历史日志数量必须介于50-1000之间', 'error');
-            return;
-        }
-
-        if (isNaN(debounceDelay) || debounceDelay < 100 || debounceDelay > 2000) {
-            addHistoryLog('防抖延迟必须介于100-2000毫秒之间', 'error');
-            return;
-        }
-
-        if (isNaN(throttleDelay) || throttleDelay < 500 || throttleDelay > 3000) {
-            addHistoryLog('节流延迟必须介于500-3000毫秒之间', 'error');
-            return;
-        }
-
-        if (isNaN(pageLoadWaitTime) || pageLoadWaitTime < 1000 || pageLoadWaitTime > 15000) {
-            addHistoryLog('页面加载等待时间必须介于1000-15000毫秒之间', 'error');
-            return;
-        }
-       
-        if (useTxtApi && txtApiMode === 'api' && !txtApiUrl) {
-            addHistoryLog('请填写TXTAPI链接', 'error');
-            return;
-        }
-       
-        if (useTxtApi && txtApiMode === 'manual' && !txtApiManualText.trim()) {
-            addHistoryLog('请填写手动文本内容', 'error');
-            return;
-        }
-
-        if (enableTargetUser && !targetUsernames.trim()) {
-            addHistoryLog('启用目标用户查找时，必须填写目标用户名', 'error');
-            return;
-        }
-       
-        userConfig.sendTime = timeValue;
-        userConfig.enableTargetUser = enableTargetUser;
-        userConfig.targetUsernames = targetUsernames;
-        userConfig.multiUserMode = multiUserMode;
-        userConfig.multiUserRetrySame = multiUserRetrySame;
-        userConfig.clickMethod = clickMethod;
-        userConfig.pageLoadWaitTime = pageLoadWaitTime;
-        userConfig.useHitokoto = useHitokoto;
-        userConfig.useTxtApi = useTxtApi;
-        userConfig.txtApiMode = txtApiMode;
-        userConfig.txtApiManualRandom = txtApiRandom;
-        userConfig.txtApiUrl = txtApiUrl;
-        userConfig.txtApiManualText = txtApiManualText;
-        userConfig.maxRetryCount = maxRetryCount;
-        userConfig.userSearchTimeout = userSearchTimeout;
-        userConfig.maxHistoryLogs = maxHistoryLogs;
-        userConfig.searchDebounceDelay = debounceDelay;
-        userConfig.searchThrottleDelay = throttleDelay;
-        userConfig.hitokotoFormat = hitokotoFormat;
-        userConfig.fromFormat = fromFormat;
-        userConfig.fromWhoFormat = fromWhoFormat;
-        userConfig.customMessage = customMessage;
-       
-        saveConfig();
-        parseTargetUsers();
-        updateUserStatusDisplay();
-       
-        document.getElementById('dy-fire-settings-panel').remove();
-        addHistoryLog('设置已保存', 'success');
-    }
-
     // 添加实时日志
     function addLog(message, type = 'info') {
         const now = new Date();
         const timeString = now.toLocaleTimeString();
         const logEntry = document.createElement('div');
-        logEntry.style.color = type === 'success' ? '#28a745' : type === 'error' ? '#dc3545' : '#17a2b8';
+        logEntry.style.color = type === 'success' ? '#00d8b8' : type === 'error' ? '#ff2c54' : '#ffc107';
+        logEntry.style.padding = '5px 0';
+        logEntry.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
         logEntry.textContent = `${timeString} - ${message}`;
        
         const logContainer = document.getElementById('dy-fire-log');
-        logContainer.prepend(logEntry);
-       
-        if (logContainer.children.length > 8) {
-            logContainer.removeChild(logContainer.lastChild);
+        if (logContainer) {
+            logContainer.prepend(logEntry);
+           
+            if (logContainer.children.length > 8) {
+                logContainer.removeChild(logContainer.lastChild);
+            }
+           
+            logContainer.scrollTop = 0;
         }
-       
-        logContainer.scrollTop = 0;
     }
 
     // 更新重试计数显示
     function updateRetryCount() {
-        document.getElementById('dy-fire-retry').textContent = `${retryCount}/${userConfig.maxRetryCount}`;
+        const retryEl = document.getElementById('dy-fire-retry');
+        if (retryEl) {
+            retryEl.textContent = `${retryCount}/${userConfig.maxRetryCount}`;
+        }
     }
 
     // 更新一言状态显示
     function updateHitokotoStatus(status, isSuccess = true) {
         const statusEl = document.getElementById('dy-fire-hitokoto');
-        statusEl.textContent = status;
-        statusEl.style.color = isSuccess ? '#28a745' : '#dc3545';
+        if (statusEl) {
+            statusEl.textContent = status;
+            statusEl.style.color = isSuccess ? '#00d8b8' : '#ff2c54';
+        }
     }
 
     // 更新TXTAPI状态显示
     function updateTxtApiStatus(status, isSuccess = true) {
         const statusEl = document.getElementById('dy-fire-txtapi');
-        statusEl.textContent = status;
-        statusEl.style.color = isSuccess ? '#28a745' : '#dc3545';
+        if (statusEl) {
+            statusEl.textContent = status;
+            statusEl.style.color = isSuccess ? '#00d8b8' : '#ff2c54';
+        }
     }
 
     // 初始化聊天列表观察器
@@ -1049,10 +424,8 @@
             return false;
         }
 
-        // 获取当前要发送的用户
         let currentTargetUser;
         if (userConfig.multiUserRetrySame && retryCount > 1) {
-            // 重试时使用同一用户
             const lastSentUser = GM_getValue('lastTargetUser', '');
             if (lastSentUser && allTargetUsers.includes(lastSentUser)) {
                 currentTargetUser = lastSentUser;
@@ -1071,7 +444,6 @@
             return false;
         }
 
-        // 保存当前目标用户
         GM_setValue('lastTargetUser', currentTargetUser);
 
         addHistoryLog(`查找目标用户: ${currentTargetUser}`, 'info');
@@ -1122,13 +494,11 @@
             
             if (clickSuccess) {
                 currentState = 'found';
-                // 点击用户后，等待页面加载完成
                 waitForPageLoad().then(() => {
                     addHistoryLog('页面加载完成，开始查找聊天输入框', 'info');
                     tryFindChatInput();
                 }).catch(error => {
                     addHistoryLog(`等待页面加载超时: ${error.message}`, 'error');
-                    // 即使超时也尝试继续
                     tryFindChatInput();
                 });
                 return true;
@@ -1144,7 +514,6 @@
                             clickableParent.click();
                             addHistoryLog('通过父元素点击成功', 'success');
                             currentState = 'found';
-                            // 点击用户后，等待页面加载完成
                             waitForPageLoad().then(() => {
                                 addHistoryLog('页面加载完成，开始查找聊天输入框', 'info');
                                 tryFindChatInput();
@@ -1176,27 +545,23 @@
                 reject(new Error(`页面加载等待超时 (${userConfig.pageLoadWaitTime}ms)`));
             }, userConfig.pageLoadWaitTime);
 
-            // 检查页面是否已经加载完成
             if (document.readyState === 'complete') {
                 clearTimeout(timeout);
                 resolve();
                 return;
             }
 
-            // 监听页面加载完成事件
             window.addEventListener('load', function onLoad() {
                 clearTimeout(timeout);
                 window.removeEventListener('load', onLoad);
                 resolve();
             });
 
-            // 同时检查DOM是否已经稳定（没有频繁的DOM变化）
             let checkCount = 0;
             const maxChecks = userConfig.pageLoadWaitTime / 100;
             const checkInterval = setInterval(() => {
                 checkCount++;
                 
-                // 检查是否有聊天输入框出现
                 const chatInput = document.querySelector('.chat-input-dccKiL');
                 if (chatInput) {
                     clearTimeout(timeout);
@@ -1205,7 +570,6 @@
                     return;
                 }
                 
-                // 检查是否超时
                 if (checkCount >= maxChecks) {
                     clearTimeout(timeout);
                     clearInterval(checkInterval);
@@ -1222,7 +586,6 @@
             return;
         }
 
-        // 检查是否所有用户都已发送
         if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
             const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
             if (unsentUsers.length === 0) {
@@ -1247,7 +610,7 @@
         executeSendProcess();
     }
 
-    // 执行发送流程 - 修复版本
+    // 执行发送流程
     async function executeSendProcess() {
         retryCount++;
         updateRetryCount();
@@ -1280,7 +643,6 @@
             
             if (!found) {
                 // 用户查找失败，观察器会继续工作
-                // 超时后会通过上面的setTimeout处理
             }
         } else {
             setTimeout(tryFindChatInput, 1000);
@@ -1288,14 +650,15 @@
     }
 
     // 尝试查找聊天输入框并发送消息
+    let chatInputRetryCount = 0;
     async function tryFindChatInput() {
-        // 先清除之前的检查计时器
         if (chatInputCheckTimer) {
             clearTimeout(chatInputCheckTimer);
         }
 
         const input = document.querySelector('.chat-input-dccKiL');
         if (input) {
+            chatInputRetryCount = 0; // 重置重试计数
             addHistoryLog('找到聊天输入框', 'info');
             
             let messageToSend;
@@ -1330,7 +693,6 @@
                     setTimeout(() => {
                         addHistoryLog('消息发送成功！', 'success');
                         
-                        // 标记用户为已发送（如果是多用户模式）
                         if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
                             const currentTargetUser = GM_getValue('lastTargetUser', '');
                             if (currentTargetUser) {
@@ -1339,6 +701,8 @@
                         } else {
                             const today = new Date().toDateString();
                             GM_setValue('lastSentDate', today);
+                            // 修复：单用户模式下发送成功后更新进度显示
+                            updateUserStatusDisplay();
                         }
                         
                         updateStatus(true);
@@ -1346,12 +710,11 @@
                         currentState = 'idle';
                         stopChatObserver();
                         
-                        // 检查是否还有未发送的用户
                         if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
                             const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
                             if (unsentUsers.length > 0) {
                                 addHistoryLog(`还有 ${unsentUsers.length} 个用户待发送，继续下一个用户`, 'info');
-                                setTimeout(sendMessage, 2000); // 2秒后发送下一个用户
+                                setTimeout(sendMessage, 2000);
                             } else {
                                 addHistoryLog('所有用户发送完成！', 'success');
                             }
@@ -1375,8 +738,17 @@
                 }
             }, 500);
         } else {
-            addHistoryLog('未找到输入框，继续查找中...', 'info');
-            // 持续检查聊天输入框，直到找到或超时
+            chatInputRetryCount++;
+            addHistoryLog(`未找到输入框，继续查找中... (${chatInputRetryCount}/${userConfig.maxRetryCount})`, 'info');
+            
+            // 检查是否超过最大重试次数
+            if (chatInputRetryCount >= userConfig.maxRetryCount) {
+                addHistoryLog(`查找聊天输入框超过最大重试次数 (${userConfig.maxRetryCount})，触发重试流程`, 'error');
+                chatInputRetryCount = 0;
+                setTimeout(executeSendProcess, 2000);
+                return;
+            }
+            
             chatInputCheckTimer = setTimeout(() => {
                 tryFindChatInput();
             }, userConfig.chatInputCheckInterval);
@@ -1598,13 +970,15 @@
     // 更新状态
     function updateStatus(isSent) {
         const statusEl = document.getElementById('dy-fire-status');
-        if (isSent) {
-            statusEl.textContent = '已发送';
-            statusEl.style.color = '#28a745';
-        } else {
-            statusEl.textContent = '未发送';
-            statusEl.style.color = '#dc3545';
-            autoSendIfNeeded();
+        if (statusEl) {
+            if (isSent) {
+                statusEl.textContent = '已发送';
+                statusEl.style.color = '#00d8b8';
+            } else {
+                statusEl.textContent = '未发送';
+                statusEl.style.color = '#dc3545';
+                autoSendIfNeeded();
+            }
         }
        
         const now = new Date();
@@ -1623,7 +997,10 @@
             }
         }
        
-        document.getElementById('dy-fire-next').textContent = nextSendTime.toLocaleString();
+        const nextEl = document.getElementById('dy-fire-next');
+        if (nextEl) {
+            nextEl.textContent = nextSendTime.toLocaleString();
+        }
         startCountdown(nextSendTime);
     }
 
@@ -1633,7 +1010,6 @@
         const today = new Date().toDateString();
        
         if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
-            // 多用户模式：检查是否有未发送的用户
             const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
             if (unsentUsers.length > 0 && !isProcessing) {
                 const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
@@ -1646,7 +1022,6 @@
                 }
             }
         } else {
-            // 单用户模式：检查今日是否已发送
             const lastSentDate = GM_getValue('lastSentDate', '');
             const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
            
@@ -1673,10 +1048,12 @@
             const diff = targetTime - now;
            
             if (diff <= 0) {
-                document.getElementById('dy-fire-countdown').textContent = '00:00:00';
+                const countdownEl = document.getElementById('dy-fire-countdown');
+                if (countdownEl) {
+                    countdownEl.textContent = '00:00:00';
+                }
                
                 if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
-                    // 多用户模式：检查是否有未发送的用户
                     const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
                     if (unsentUsers.length > 0) {
                         if (!isProcessing) {
@@ -1693,7 +1070,6 @@
                         startCountdown(nextSendTime);
                     }
                 } else {
-                    // 单用户模式
                     const lastSentDate = GM_getValue('lastSentDate', '');
                     const today = new Date().toDateString();
                    
@@ -1721,8 +1097,11 @@
             const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
             const seconds = Math.floor((diff % (1000 * 60)) / 1000);
            
-            document.getElementById('dy-fire-countdown').textContent =
-                `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            const countdownEl = document.getElementById('dy-fire-countdown');
+            if (countdownEl) {
+                countdownEl.textContent =
+                    `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
         }
        
         update();
@@ -1801,13 +1180,975 @@
         }
     }
 
-    // 在初始化函数中确保按钮状态正确
+    // ==================== UI相关函数 ====================
+
+    // 更新用户状态显示
+    function updateUserStatusDisplay() {
+        const statusEl = document.getElementById('dy-fire-user-status');
+        const progressEl = document.getElementById('dy-fire-user-progress');
+        
+        if (!statusEl || !progressEl) return;
+        
+        if (!userConfig.enableTargetUser || allTargetUsers.length === 0) {
+            const lastSentDate = GM_getValue('lastSentDate', '');
+            const today = new Date().toDateString();
+            const isSentToday = lastSentDate === today;
+            const progressText = isSentToday ? '1/1' : '0/1';
+            
+            progressEl.textContent = progressText;
+            
+            if (isSentToday) {
+                statusEl.textContent = '已完成';
+                statusEl.style.color = '#00d8b8';
+            } else {
+                statusEl.textContent = '未开始';
+                statusEl.style.color = '#999';
+            }
+            return;
+        }
+        
+        const sentCount = sentUsersToday.length;
+        const totalCount = allTargetUsers.length;
+        const progressText = `${sentCount}/${totalCount}`;
+        
+        progressEl.textContent = progressText;
+        
+        if (sentCount >= totalCount) {
+            statusEl.textContent = '全部完成';
+            statusEl.style.color = '#00d8b8';
+        } else {
+            statusEl.textContent = `进行中 ${progressText}`;
+            statusEl.style.color = '#ff2c54';
+        }
+    }
+
+    // 重置今日发送记录
+    function resetTodaySentUsers() {
+        sentUsersToday = [];
+        GM_setValue('sentUsersToday', []);
+        currentUserIndex = -1;
+        GM_setValue('currentUserIndex', -1);
+        GM_setValue('lastSentDate', '');
+        addHistoryLog('今日发送记录已重置', 'info');
+        updateUserStatusDisplay();
+    }
+
+    // 更新用户状态显示
+    function updateUserStatus(status, isSuccess = null) {
+        const statusEl = document.getElementById('dy-fire-user-status');
+        if (!statusEl) return;
+        
+        if (status) {
+            statusEl.textContent = status;
+        }
+        
+        if (isSuccess === true) {
+            statusEl.style.color = '#00d8b8';
+        } else if (isSuccess === false) {
+            statusEl.style.color = '#ff2c54';
+        } else {
+            statusEl.style.color = '#999';
+        }
+    }
+
+    // 创建UI控制面板
+    function createControlPanel() {
+        const existingPanel = document.getElementById('dy-fire-helper');
+        if (existingPanel) {
+            existingPanel.remove();
+        }
+
+        const panel = document.createElement('div');
+        panel.id = 'dy-fire-helper';
+        panel.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 450px;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.1);
+            z-index: 9999;
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            padding: 0;
+            color: #fff;
+            transition: all 0.3s ease;
+            max-height: 1000px;
+            overflow: hidden;
+            backdrop-filter: blur(10px);
+            user-select: none;
+        `;
+
+        panel.innerHTML = `
+            <div id="dy-fire-header" style="padding: 20px 20px 15px 20px; border-bottom: 1px solid rgba(255,255,255,0.1); cursor: move;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <h3 style="margin: 0; color: #fff; font-size: 18px; display: flex; align-items: center; font-weight: 600;">
+                        <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ff2c54; margin-right: 10px; box-shadow: 0 0 8px #ff2c54;"></span>
+                        🔥 抖音续火助手 ${isScriptCat ? '<span style="font-size: 12px; color: #00d8b8; margin-left: 8px;">(ScriptCat)</span>' : ''}
+                    </h3>
+                    <button id="dy-fire-helper-close" style="background: rgba(255,255,255,0.1); border: none; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; color: #fff; font-size: 16px; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;">×</button>
+                </div>
+               
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 12px;">
+                    <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
+                        <div style="color: #999; margin-bottom: 4px;">今日状态</div>
+                        <div id="dy-fire-status" style="color: #00d8b8; font-weight: 600; font-size: 13px;">已发送</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
+                        <div style="color: #999; margin-bottom: 4px;">用户状态</div>
+                        <div id="dy-fire-user-status" style="color: #999; font-weight: 600; font-size: 13px;">未启用</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
+                        <div style="color: #999; margin-bottom: 4px;">发送进度</div>
+                        <div id="dy-fire-user-progress" style="color: #ff2c54; font-weight: 600; font-size: 13px;"></div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
+                        <div style="color: #999; margin-bottom: 4px;">重试次数</div>
+                        <div id="dy-fire-retry" style="color: #fff; font-weight: 600; font-size: 13px;">0/${userConfig.maxRetryCount}</div>
+                    </div>
+                </div>
+            </div>
+           
+            <div style="padding: 15px 20px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+                    <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
+                        <div style="color: #999; font-size: 11px; margin-bottom: 2px;">下次发送</div>
+                        <div id="dy-fire-next" style="color: #fff; font-size: 12px; font-weight: 500;">2023-11-05 00:01:00</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
+                        <div style="color: #999; font-size: 11px; margin-bottom: 2px;">倒计时</div>
+                        <div id="dy-fire-countdown" style="color: #ff2c54; font-size: 12px; font-weight: 700;">23:45:12</div>
+                    </div>
+                </div>
+               
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                    <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
+                        <div style="color: #999; font-size: 11px; margin-bottom: 2px;">一言状态</div>
+                        <div id="dy-fire-hitokoto" style="color: #00d8b8; font-size: 12px; font-weight: 500;">未获取</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
+                        <div style="color: #999; font-size: 11px; margin-bottom: 2px;">TXTAPI状态</div>
+                        <div id="dy-fire-txtapi" style="color: #00d8b8; font-size: 12px; font-weight: 500;">未获取</div>
+                    </div>
+                </div>
+            </div>
+           
+            <div style="padding: 15px 20px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+                    <button id="dy-fire-send" style="padding: 12px; background: linear-gradient(135deg, #ff2c54 0%, #ff6b8b 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s ease; box-shadow: 0 4px 12px rgba(255, 44, 84, 0.3);">
+                        🚀 立即发送
+                    </button>
+                    <button id="dy-fire-reset-users" style="padding: 12px; background: rgba(111, 66, 193, 0.8); color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s ease;">
+                        🔄 重置记录
+                    </button>
+                </div>
+               
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <button id="dy-fire-settings" style="padding: 10px; background: rgba(255,255,255,0.1); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s ease;">
+                        ⚙️ 设置
+                    </button>
+                    <button id="dy-fire-history" style="padding: 10px; background: rgba(255,255,255,0.1); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s ease;">
+                        📋 历史日志
+                    </button>
+                    <button id="dy-fire-clear" style="padding: 10px; background: rgba(255,255,255,0.1); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s ease;">
+                        🗑️ 清空记录
+                    </button>
+                    <button id="dy-fire-reset" style="padding: 10px; background: rgba(255,255,255,0.1); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s ease;">
+                        🔧 重置配置
+                    </button>
+                </div>
+            </div>
+           
+            <div style="padding: 15px 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <div style="font-weight: 600; font-size: 14px;">操作日志</div>
+                    <div style="font-size: 11px; color: #999;">实时更新</div>
+                </div>
+                <div id="dy-fire-log" style="font-size: 12px; height: 120px; overflow-y: auto; line-height: 1.4; background: rgba(0,0,0,0.3); border-radius: 8px; padding: 10px;">
+                    <div style="color: #00d8b8; padding: 5px 0;">系统已就绪，等待执行...</div>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(panel);
+
+        addButtonHoverEffects();
+        addDragFunctionality(panel, 'dy-fire-header');
+        createReopenButton();
+
+        document.getElementById('dy-fire-helper-close').addEventListener('click', function() {
+            panel.style.display = 'none';
+            const reopenBtn = document.getElementById('dy-fire-reopen-btn');
+            if (reopenBtn) {
+                reopenBtn.style.display = 'flex';
+            }
+        });
+        
+        document.getElementById('dy-fire-send').addEventListener('click', sendMessage);
+        document.getElementById('dy-fire-settings').addEventListener('click', showSettingsPanel);
+        document.getElementById('dy-fire-history').addEventListener('click', showHistoryPanel);
+        document.getElementById('dy-fire-clear').addEventListener('click', clearData);
+        document.getElementById('dy-fire-reset').addEventListener('click', resetAllConfig);
+        document.getElementById('dy-fire-reset-users').addEventListener('click', resetTodaySentUsers);
+        
+        updateUserStatusDisplay();
+    }
+
+    // 添加按钮悬停效果
+    function addButtonHoverEffects() {
+        const buttons = document.querySelectorAll('#dy-fire-helper button');
+        buttons.forEach(button => {
+            if (button.id !== 'dy-fire-helper-close') {
+                button.addEventListener('mouseenter', function() {
+                    this.style.transform = 'translateY(-2px)';
+                    this.style.boxShadow = '0 6px 20px rgba(255, 44, 84, 0.4)';
+                });
+                
+                button.addEventListener('mouseleave', function() {
+                    this.style.transform = 'translateY(0)';
+                    this.style.boxShadow = '';
+                });
+            }
+        });
+
+        const closeBtn = document.getElementById('dy-fire-helper-close');
+        if (closeBtn) {
+            closeBtn.addEventListener('mouseenter', function() {
+                this.style.background = 'rgba(255,255,255,0.2)';
+                this.style.transform = 'scale(1.1)';
+            });
+            
+            closeBtn.addEventListener('mouseleave', function() {
+                this.style.background = 'rgba(255,255,255,0.1)';
+                this.style.transform = 'scale(1)';
+            });
+        }
+    }
+
+    // 添加拖动功能
+    function addDragFunctionality(panel, headerSelector) {
+        const header = typeof headerSelector === 'string' ? 
+            document.getElementById(headerSelector) : headerSelector;
+        
+        if (!header) return;
+        
+        header.addEventListener('mousedown', function(e) {
+            if (e.target.tagName === 'BUTTON') return;
+            
+            isDragging = true;
+            currentPanel = panel;
+            
+            const rect = panel.getBoundingClientRect();
+            // 修复拖动偏移计算
+            dragOffsetX = e.clientX - rect.left;
+            dragOffsetY = e.clientY - rect.top;
+            
+            // 移除transform定位，改用left/top定位
+            if (panel.style.transform && panel.style.transform.includes('translate')) {
+                panel.style.transform = 'none';
+                // 设置初始位置
+                panel.style.left = rect.left + 'px';
+                panel.style.top = rect.top + 'px';
+                panel.style.right = 'auto';
+            }
+            
+            panel.style.transition = 'none';
+            document.body.style.userSelect = 'none';
+            
+            e.preventDefault();
+        });
+        
+        document.addEventListener('mousemove', function(e) {
+            if (!isDragging || !currentPanel) return;
+            
+            const x = e.clientX - dragOffsetX;
+            const y = e.clientY - dragOffsetY;
+            
+            const maxX = window.innerWidth - currentPanel.offsetWidth;
+            const maxY = window.innerHeight - currentPanel.offsetHeight;
+            
+            currentPanel.style.left = Math.max(0, Math.min(x, maxX)) + 'px';
+            currentPanel.style.right = 'auto';
+            currentPanel.style.top = Math.max(0, Math.min(y, maxY)) + 'px';
+        });
+        
+        document.addEventListener('mouseup', function() {
+            if (isDragging) {
+                isDragging = false;
+                if (currentPanel) {
+                    currentPanel.style.transition = 'all 0.3s ease';
+                }
+                currentPanel = null;
+                document.body.style.userSelect = '';
+            }
+        });
+    }
+
+    // 创建重新打开面板的按钮
+    function createReopenButton() {
+        const existingBtn = document.getElementById('dy-fire-reopen-btn');
+        if (existingBtn) {
+            existingBtn.remove();
+        }
+
+        const reopenBtn = document.createElement('div');
+        reopenBtn.id = 'dy-fire-reopen-btn';
+        reopenBtn.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, #ff2c54 0%, #ff6b8b 100%);
+            border-radius: 50%;
+            color: white;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            z-index: 9998;
+            box-shadow: 0 6px 20px rgba(255, 44, 84, 0.4);
+            font-size: 20px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+            border: 2px solid rgba(255,255,255,0.2);
+        `;
+        reopenBtn.innerHTML = '🔥';
+        reopenBtn.title = '打开续火助手面板';
+
+        reopenBtn.addEventListener('mouseenter', function() {
+            this.style.transform = 'scale(1.1) rotate(10deg)';
+            this.style.boxShadow = '0 8px 25px rgba(255, 44, 84, 0.6)';
+        });
+        
+        reopenBtn.addEventListener('mouseleave', function() {
+            this.style.transform = 'scale(1) rotate(0)';
+            this.style.boxShadow = '0 6px 20px rgba(255, 44, 84, 0.4)';
+        });
+
+        reopenBtn.addEventListener('click', function() {
+            const panel = document.getElementById('dy-fire-helper');
+            if (panel) {
+                panel.style.display = 'block';
+                reopenBtn.style.display = 'none';
+            } else {
+                createControlPanel();
+                reopenBtn.style.display = 'none';
+            }
+        });
+        
+        document.body.appendChild(reopenBtn);
+    }
+
+    // 显示历史日志面板
+    function showHistoryPanel() {
+        const existingPanel = document.getElementById('dy-fire-history-panel');
+        if (existingPanel) {
+            existingPanel.remove();
+            return;
+        }
+
+        const historyPanel = document.createElement('div');
+        historyPanel.id = 'dy-fire-history-panel';
+        // 修复：使用left/top定位替代transform
+        historyPanel.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            max-width: 90vw;
+            width: 800px;
+            height: 600px;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            z-index: 10000;
+            padding: 0;
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+            overflow: hidden;
+        `;
+
+        const logs = getHistoryLogs();
+        const logItems = logs.map(log => `
+            <div style="padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.05); transition: background 0.2s ease;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="font-size: 11px; color: #999;">
+                        ${new Date(log.timestamp).toLocaleString()}
+                    </span>
+                    <span style="padding: 4px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+                         background: ${log.type === 'success' ? 'rgba(0, 216, 184, 0.2)' : log.type === 'error' ? 'rgba(255, 44, 84, 0.2)' : 'rgba(255, 193, 7, 0.2)'}; 
+                         color: ${log.type === 'success' ? '#00d8b8' : log.type === 'error' ? '#ff2c54' : '#ffc107'};
+                         border: 1px solid ${log.type === 'success' ? 'rgba(0, 216, 184, 0.3)' : log.type === 'error' ? 'rgba(255, 44, 84, 0.3)' : 'rgba(255, 193, 7, 0.3)'}">
+                        ${log.type.toUpperCase()}
+                    </span>
+                </div>
+                <div style="font-size: 13px; color: #fff; line-height: 1.4;">${log.message}</div>
+            </div>
+        `).join('');
+
+        historyPanel.innerHTML = `
+            <div id="dy-fire-history-header" style="padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); cursor: move;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin: 0; color: #fff; font-size: 18px; font-weight: 600;">
+                        📋 历史日志 (${logs.length}/${userConfig.maxHistoryLogs})
+                    </h3>
+                    <button id="dy-fire-history-close" style="background: rgba(255,255,255,0.1); border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; color: #fff; font-size: 18px; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;">×</button>
+                </div>
+            </div>
+            
+            <div style="flex: 1; overflow-y: auto; padding: 0;">
+                <div style="min-height: 100%; background: rgba(0,0,0,0.2);">
+                    ${logs.length > 0 ? logItems : `
+                        <div style="text-align: center; color: #666; padding: 60px 20px;">
+                            <div style="font-size: 48px; margin-bottom: 20px;">📝</div>
+                            <div style="font-size: 16px; color: #999;">暂无日志记录</div>
+                        </div>
+                    `}
+                </div>
+            </div>
+            
+            <div style="padding: 20px; border-top: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2);">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                    <button id="dy-fire-history-export" style="padding: 12px; background: linear-gradient(135deg, #00d8b8 0%, #00b8a8 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s ease;">
+                        📤 导出日志
+                    </button>
+                    <button id="dy-fire-history-clear" style="padding: 12px; background: linear-gradient(135deg, #ff2c54 0%, #ff6b8b 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s ease;">
+                        🗑️ 清空日志
+                    </button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(historyPanel);
+
+        addDragFunctionality(historyPanel, 'dy-fire-history-header');
+
+        const historyButtons = historyPanel.querySelectorAll('button');
+        historyButtons.forEach(button => {
+            if (button.id !== 'dy-fire-history-close') {
+                button.addEventListener('mouseenter', function() {
+                    this.style.transform = 'translateY(-2px)';
+                });
+                button.addEventListener('mouseleave', function() {
+                    this.style.transform = 'translateY(0)';
+                });
+            }
+        });
+
+        const historyCloseBtn = document.getElementById('dy-fire-history-close');
+        historyCloseBtn.addEventListener('mouseenter', function() {
+            this.style.background = 'rgba(255,255,255,0.2)';
+            this.style.transform = 'scale(1.1)';
+        });
+        historyCloseBtn.addEventListener('mouseleave', function() {
+            this.style.background = 'rgba(255,255,255,0.1)';
+            this.style.transform = 'scale(1)';
+        });
+
+        document.getElementById('dy-fire-history-close').addEventListener('click', function() {
+            historyPanel.remove();
+        });
+        document.getElementById('dy-fire-history-export').addEventListener('click', exportHistoryLogs);
+        document.getElementById('dy-fire-history-clear').addEventListener('click', clearHistoryLogs);
+    }
+
+    // 显示设置面板
+    function showSettingsPanel() {
+        const existingSettings = document.getElementById('dy-fire-settings-panel');
+        if (existingSettings) {
+            existingSettings.remove();
+            return;
+        }
+
+        const settingsPanel = document.createElement('div');
+        settingsPanel.id = 'dy-fire-settings-panel';
+        // 修复：使用left/top定位替代transform
+        settingsPanel.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            max-width: 90vw;
+            width: 900px;
+            max-height: 85vh;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            z-index: 10000;
+            padding: 0;
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            overflow: hidden;
+            box-sizing: border-box;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+        `;
+
+        settingsPanel.innerHTML = `
+            <div id="dy-fire-settings-header" style="padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); cursor: move;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin: 0; color: #fff; font-size: 18px; font-weight: 600;">⚙️ 设置面板</h3>
+                    <button id="dy-fire-settings-close" style="background: rgba(255,255,255,0.1); border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; color: #fff; font-size: 18px; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;">×</button>
+                </div>
+            </div>
+           
+            <div style="display: flex; height: calc(85vh - 140px);">
+                <div style="width: 200px; background: rgba(0,0,0,0.3); padding: 20px 0; border-right: 1px solid rgba(255,255,255,0.1);">
+                    <div class="settings-nav-item active" data-tab="basic">📅 基本设置</div>
+                    <div class="settings-nav-item" data-tab="message">💬 消息设置</div>
+                    <div class="settings-nav-item" data-tab="api">🔗 API设置</div>
+                    <div class="settings-nav-item" data-tab="users">👥 用户设置</div>
+                    <div class="settings-nav-item" data-tab="advanced">⚡ 高级设置</div>
+                </div>
+               
+                <div style="flex: 1; overflow-y: auto; padding: 20px;">
+                    <div id="basic-settings" class="settings-tab active">
+                        <div class="settings-section">
+                            <h4 style="color: #fff; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">🕒 发送时间设置</h4>
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">发送时间 (HH:mm:ss)</label>
+                                <input type="text" id="dy-fire-settings-time" value="${userConfig.sendTime}" style="width: 100%; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; box-sizing: border-box; color: #fff; font-size: 14px;" placeholder="例如: 00:01:00">
+                                <div style="font-size: 12px; color: #999; margin-top: 5px;">设置每日自动发送消息的时间</div>
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <h4 style="color: #fff; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">🔄 重试设置</h4>
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">最大重试次数</label>
+                                <input type="number" id="dy-fire-settings-retry-count" min="1" max="10" value="${userConfig.maxRetryCount}" style="width: 100%; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; box-sizing: border-box; color: #fff; font-size: 14px;">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="message-settings" class="settings-tab" style="display: none;">
+                        <div class="settings-section">
+                            <h4 style="color: #fff; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">📝 消息内容</h4>
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">自定义消息模板</label>
+                                <textarea id="dy-fire-settings-custom-message" style="width: 100%; height: 120px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;">${userConfig.customMessage}</textarea>
+                                <div style="font-size: 12px; color: #999; margin-top: 5px;">
+                                    使用 [API] 作为一言内容的占位符<br>
+                                    使用 [TXTAPI] 作为TXTAPI内容的占位符<br>
+                                    支持换行符，关闭API时占位符标记将保留
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="api-settings" class="settings-tab" style="display: none;">
+                        <div class="settings-section">
+                            <h4 style="color: #fff; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">📚 一言API</h4>
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 10px;">
+                                    <input type="checkbox" id="dy-fire-settings-use-hitokoto" ${userConfig.useHitokoto ? 'checked' : ''} style="margin-right: 10px;">
+                                    <span style="color: #ccc;">启用一言API</span>
+                                </label>
+                            </div>
+                           
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">一言格式</label>
+                                <textarea id="dy-fire-settings-hitokoto-format" style="width: 100%; height: 60px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;">${userConfig.hitokotoFormat}</textarea>
+                                <div style="font-size: 12px; color: #999; margin-top: 5px;">
+                                    可用变量: {hitokoto} {from} {from_who}<br>
+                                    示例: {hitokoto} —— {from}{from_who}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <h4 style="color: #fff; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">📄 TXTAPI</h4>
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 10px;">
+                                    <input type="checkbox" id="dy-fire-settings-use-txtapi" ${userConfig.useTxtApi ? 'checked' : ''} style="margin-right: 10px;">
+                                    <span style="color: #ccc;">启用TXTAPI</span>
+                                </label>
+                            </div>
+                           
+                            <div id="txt-api-mode-container" style="margin-bottom: 15px; ${userConfig.useTxtApi ? '' : 'display: none;'}">
+                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">TXTAPI模式</label>
+                                <div style="display: flex; gap: 20px;">
+                                    <label style="display: flex; align-items: center; cursor: pointer;">
+                                        <input type="radio" name="txt-api-mode" value="api" ${userConfig.txtApiMode === 'api' ? 'checked' : ''} style="margin-right: 8px;">
+                                        <span style="color: #ccc;">API模式</span>
+                                    </label>
+                                    <label style="display: flex; align-items: center; cursor: pointer;">
+                                        <input type="radio" name="txt-api-mode" value="manual" ${userConfig.txtApiMode === 'manual' ? 'checked' : ''} style="margin-right: 8px;">
+                                        <span style="color: #ccc;">手动模式</span>
+                                    </label>
+                                </div>
+                            </div>
+                           
+                            <div id="txt-api-url-container" style="margin-bottom: 15px; ${userConfig.useTxtApi && userConfig.txtApiMode === 'api' ? '' : 'display: none;'}">
+                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">TXTAPI链接</label>
+                                <input type="text" id="dy-fire-settings-txtapi-url" value="${userConfig.txtApiUrl}" style="width: 100%; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; box-sizing: border-box; color: #fff; font-size: 14px;" placeholder="例如: https://v1.hitokoto.cn/?encode=text">
+                            </div>
+                           
+                            <div id="txt-api-manual-container" style="margin-bottom: 15px; ${userConfig.useTxtApi && userConfig.txtApiMode === 'manual' ? '' : 'display: none;'}">
+                                <div style="margin-bottom: 10px;">
+                                    <label style="display: flex; align-items: center; cursor: pointer;">
+                                        <input type="checkbox" id="dy-fire-settings-txtapi-random" ${userConfig.txtApiManualRandom ? 'checked' : ''} style="margin-right: 8px;">
+                                        <span style="color: #ccc;">随机选择文本</span>
+                                    </label>
+                                </div>
+                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">手动文本内容（一行一个）</label>
+                                <textarea id="dy-fire-settings-txtapi-manual" style="width: 100%; height: 120px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;">${userConfig.txtApiManualText}</textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="users-settings" class="settings-tab" style="display: none;">
+                        <div class="settings-section">
+                            <h4 style="color: #fff; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">👥 用户设置</h4>
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 15px;">
+                                    <input type="checkbox" id="dy-fire-settings-enable-target" ${userConfig.enableTargetUser ? 'checked' : ''} style="margin-right: 10px;">
+                                    <span style="color: #ccc;">启用目标用户查找</span>
+                                </label>
+                            </div>
+
+                            <div id="target-user-container" style="margin-bottom: 15px; ${userConfig.enableTargetUser ? '' : 'display: none;'}">
+                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">目标用户名（支持单个或多个用户，用逗号、竖线或换行分隔）</label>
+                                <textarea id="dy-fire-settings-target-user" style="width: 100%; height: 100px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;" placeholder="例如: 用户1&#10;或: 用户1, 用户2 | 用户3">${userConfig.targetUsernames}</textarea>
+                                <div style="font-size: 12px; color: #999; margin-top: 5px;">启用后会自动在聊天列表中查找指定用户并点击，支持单个或多个用户</div>
+                                
+                                <div style="margin-top: 15px;">
+                                    <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">用户发送模式</label>
+                                    <div style="display: flex; gap: 20px;">
+                                        <label style="display: flex; align-items: center; cursor: pointer;">
+                                            <input type="radio" name="multi-user-mode" value="sequential" ${userConfig.multiUserMode === 'sequential' ? 'checked' : ''} style="margin-right: 8px;">
+                                            <span style="color: #ccc;">顺序发送</span>
+                                        </label>
+                                        <label style="display: flex; align-items: center; cursor: pointer;">
+                                            <input type="radio" name="multi-user-mode" value="random" ${userConfig.multiUserMode === 'random' ? 'checked' : ''} style="margin-right: 8px;">
+                                            <span style="color: #ccc;">随机发送</span>
+                                        </label>
+                                    </div>
+                                    <div style="font-size: 12px; color: #999; margin-top: 5px;">仅在有多个用户时生效</div>
+                                </div>
+                                
+                                <div style="margin-top: 15px;">
+                                    <label style="display: flex; align-items: center; cursor: pointer;">
+                                        <input type="checkbox" id="dy-fire-settings-multi-retry-same" ${userConfig.multiUserRetrySame ? 'checked' : ''} style="margin-right: 8px;">
+                                        <span style="color: #ccc;">重试时使用同一用户</span>
+                                    </label>
+                                    <div style="font-size: 12px; color: #999; margin-top: 5px;">启用后重试时会继续发送给同一用户，否则会切换到下一用户</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="advanced-settings" class="settings-tab" style="display: none;">
+                        <div class="settings-section">
+                            <h4 style="color: #fff; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">⚡ 性能设置</h4>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">用户查找超时(毫秒)</label>
+                                    <input type="number" id="dy-fire-settings-user-timeout" min="1000" max="30000" value="${userConfig.userSearchTimeout}" style="width: 100%; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; box-sizing: border-box; color: #fff; font-size: 14px;">
+                                </div>
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">页面加载等待时间(毫秒)</label>
+                                    <input type="number" id="dy-fire-settings-page-wait" min="1000" max="15000" value="${userConfig.pageLoadWaitTime}" style="width: 100%; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; box-sizing: border-box; color: #fff; font-size: 14px;">
+                                </div>
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">查找防抖延迟(毫秒)</label>
+                                    <input type="number" id="dy-fire-settings-debounce-delay" min="100" max="2000" value="${userConfig.searchDebounceDelay}" style="width: 100%; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; box-sizing: border-box; color: #fff; font-size: 14px;">
+                                    <div style="font-size: 12px; color: #999; margin-top: 5px;">降低频繁查找导致的性能消耗</div>
+                                </div>
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">查找节流延迟(毫秒)</label>
+                                    <input type="number" id="dy-fire-settings-throttle-delay" min="500" max="3000" value="${userConfig.searchThrottleDelay}" style="width: 100%; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; box-sizing: border-box; color: #fff; font-size: 14px;">
+                                    <div style="font-size: 12px; color: #999; margin-top: 5px;">控制查找的最小时间间隔</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <h4 style="color: #fff; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">🔧 技术设置</h4>
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">点击方法</label>
+                                <div style="display: flex; gap: 20px;">
+                                    <label style="display: flex; align-items: center; cursor: pointer;">
+                                        <input type="radio" name="click-method" value="direct" ${userConfig.clickMethod === 'direct' ? 'checked' : ''} style="margin-right: 8px;">
+                                        <span style="color: #ccc;">直接点击</span>
+                                    </label>
+                                    <label style="display: flex; align-items: center; cursor: pointer;">
+                                        <input type="radio" name="click-method" value="event" ${userConfig.clickMethod === 'event' ? 'checked' : ''} style="margin-right: 8px;">
+                                        <span style="color: #ccc;">事件触发</span>
+                                    </label>
+                                </div>
+                                <div style="font-size: 12px; color: #999; margin-top: 5px;">直接点击更可靠，事件触发更安全</div>
+                            </div>
+
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">最大历史日志数量</label>
+                                <input type="number" id="dy-fire-settings-max-logs" min="50" max="1000" value="${userConfig.maxHistoryLogs}" style="width: 100%; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; box-sizing: border-box; color: #fff; font-size: 14px;">
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <h4 style="color: #fff; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">🎨 格式设置</h4>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">from格式</label>
+                                    <input type="text" id="dy-fire-settings-from-format" value="${userConfig.fromFormat}" style="width: 100%; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; box-sizing: border-box; color: #fff; font-size: 14px;" placeholder="例如: {from}">
+                                    <div style="font-size: 12px; color: #999; margin-top: 5px;">当from不为空时显示此格式</div>
+                                </div>
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">from_who格式</label>
+                                    <input type="text" id="dy-fire-settings-from-who-format" value="${userConfig.fromWhoFormat}" style="width: 100%; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; box-sizing: border-box; color: #fff; font-size: 14px;" placeholder="例如: 「{from_who}」">
+                                    <div style="font-size: 12px; color: #999; margin-top: 5px;">当from_who不为空时显示此格式</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+           
+            <div style="padding: 20px; border-top: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2);">
+                <button id="dy-fire-settings-save" style="width: 100%; padding: 15px; background: linear-gradient(135deg, #00d8b8 0%, #00b8a8 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 16px; transition: all 0.2s ease; box-shadow: 0 4px 12px rgba(0, 216, 184, 0.3);">
+                    💾 保存设置
+                </button>
+            </div>
+        `;
+
+        document.body.appendChild(settingsPanel);
+
+        addDragFunctionality(settingsPanel, 'dy-fire-settings-header');
+
+        const navItems = settingsPanel.querySelectorAll('.settings-nav-item');
+        const tabs = settingsPanel.querySelectorAll('.settings-tab');
+        
+        navItems.forEach(item => {
+            item.addEventListener('click', function() {
+                const tabName = this.getAttribute('data-tab');
+                
+                navItems.forEach(nav => nav.classList.remove('active'));
+                this.classList.add('active');
+                
+                tabs.forEach(tab => {
+                    tab.style.display = 'none';
+                    if (tab.id === `${tabName}-settings`) {
+                        tab.style.display = 'block';
+                    }
+                });
+            });
+            
+            item.addEventListener('mouseenter', function() {
+                if (!this.classList.contains('active')) {
+                    this.style.background = 'rgba(255,255,255,0.05)';
+                }
+            });
+            item.addEventListener('mouseleave', function() {
+                if (!this.classList.contains('active')) {
+                    this.style.background = 'transparent';
+                }
+            });
+        });
+
+        const navStyle = `
+            .settings-nav-item {
+                padding: 12px 20px;
+                color: #999;
+                cursor: pointer;
+                transition: all 0.2s ease;
+                border-left: 3px solid transparent;
+                font-size: 14px;
+            }
+            .settings-nav-item:hover {
+                color: #fff;
+                background: rgba(255,255,255,0.05);
+            }
+            .settings-nav-item.active {
+                color: #ff2c54;
+                background: rgba(255,44,84,0.1);
+                border-left-color: #ff2c54;
+                font-weight: 600;
+            }
+            .settings-section {
+                background: rgba(255,255,255,0.05);
+                border-radius: 12px;
+                padding: 20px;
+                margin-bottom: 20px;
+                border: 1px solid rgba(255,255,255,0.1);
+            }
+        `;
+        const styleEl = document.createElement('style');
+        styleEl.textContent = navStyle;
+        settingsPanel.appendChild(styleEl);
+
+        document.getElementById('dy-fire-settings-enable-target').addEventListener('change', function() {
+            document.getElementById('target-user-container').style.display = this.checked ? 'block' : 'none';
+        });
+
+        const modeRadios = document.querySelectorAll('input[name="txt-api-mode"]');
+        modeRadios.forEach(radio => {
+            radio.addEventListener('change', function() {
+                const mode = this.value;
+                document.getElementById('txt-api-url-container').style.display = mode === 'api' ? 'block' : 'none';
+                document.getElementById('txt-api-manual-container').style.display = mode === 'manual' ? 'block' : 'none';
+            });
+        });
+
+        document.getElementById('dy-fire-settings-use-txtapi').addEventListener('change', function() {
+            const useTxtApi = this.checked;
+            document.getElementById('txt-api-mode-container').style.display = useTxtApi ? 'block' : 'none';
+            
+            const currentMode = document.querySelector('input[name="txt-api-mode"]:checked').value;
+            document.getElementById('txt-api-url-container').style.display = (useTxtApi && currentMode === 'api') ? 'block' : 'none';
+            document.getElementById('txt-api-manual-container').style.display = (useTxtApi && currentMode === 'manual') ? 'block' : 'none';
+        });
+
+        const settingsButtons = settingsPanel.querySelectorAll('button');
+        settingsButtons.forEach(button => {
+            if (button.id !== 'dy-fire-settings-close') {
+                button.addEventListener('mouseenter', function() {
+                    this.style.transform = 'translateY(-2px)';
+                });
+                button.addEventListener('mouseleave', function() {
+                    this.style.transform = 'translateY(0)';
+                });
+            }
+        });
+
+        const settingsCloseBtn = document.getElementById('dy-fire-settings-close');
+        settingsCloseBtn.addEventListener('mouseenter', function() {
+            this.style.background = 'rgba(255,255,255,0.2)';
+            this.style.transform = 'scale(1.1)';
+        });
+        settingsCloseBtn.addEventListener('mouseleave', function() {
+            this.style.background = 'rgba(255,255,255,0.1)';
+            this.style.transform = 'scale(1)';
+        });
+
+        document.getElementById('dy-fire-settings-close').addEventListener('click', function() {
+            settingsPanel.remove();
+        });
+
+        document.getElementById('dy-fire-settings-save').addEventListener('click', saveSettings);
+    }
+
+    // 保存设置
+    function saveSettings() {
+        const timeValue = document.getElementById('dy-fire-settings-time').value;
+        const enableTargetUser = document.getElementById('dy-fire-settings-enable-target').checked;
+        const targetUsernames = document.getElementById('dy-fire-settings-target-user').value;
+        const multiUserMode = document.querySelector('input[name="multi-user-mode"]:checked').value;
+        const multiUserRetrySame = document.getElementById('dy-fire-settings-multi-retry-same').checked;
+        const clickMethod = document.querySelector('input[name="click-method"]:checked').value;
+        const pageLoadWaitTime = parseInt(document.getElementById('dy-fire-settings-page-wait').value, 10);
+        const useHitokoto = document.getElementById('dy-fire-settings-use-hitokoto').checked;
+        const useTxtApi = document.getElementById('dy-fire-settings-use-txtapi').checked;
+        const txtApiMode = document.querySelector('input[name="txt-api-mode"]:checked').value;
+        const txtApiRandom = document.getElementById('dy-fire-settings-txtapi-random').checked;
+        const txtApiUrl = document.getElementById('dy-fire-settings-txtapi-url').value;
+        const txtApiManualText = document.getElementById('dy-fire-settings-txtapi-manual').value;
+        const maxRetryCount = parseInt(document.getElementById('dy-fire-settings-retry-count').value, 10);
+        const userSearchTimeout = parseInt(document.getElementById('dy-fire-settings-user-timeout').value, 10);
+        const maxHistoryLogs = parseInt(document.getElementById('dy-fire-settings-max-logs').value, 10);
+        const debounceDelay = parseInt(document.getElementById('dy-fire-settings-debounce-delay').value, 10);
+        const throttleDelay = parseInt(document.getElementById('dy-fire-settings-throttle-delay').value, 10);
+        const hitokotoFormat = document.getElementById('dy-fire-settings-hitokoto-format').value;
+        const fromFormat = document.getElementById('dy-fire-settings-from-format').value;
+        const fromWhoFormat = document.getElementById('dy-fire-settings-from-who-format').value;
+        const customMessage = document.getElementById('dy-fire-settings-custom-message').value;
+       
+        if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/.test(timeValue)) {
+            addHistoryLog('时间格式错误，请使用HH:mm:ss格式', 'error');
+            return;
+        }
+       
+        if (isNaN(maxRetryCount) || maxRetryCount < 1 || maxRetryCount > 10) {
+            addHistoryLog('重试次数必须是1-10之间的数字', 'error');
+            return;
+        }
+
+        if (isNaN(userSearchTimeout) || userSearchTimeout < 1000 || userSearchTimeout > 30000) {
+            addHistoryLog('用户查找超时必须介于1000-30000毫秒之间', 'error');
+            return;
+        }
+
+        if (isNaN(maxHistoryLogs) || maxHistoryLogs < 50 || maxHistoryLogs > 1000) {
+            addHistoryLog('最大历史日志数量必须介于50-1000之间', 'error');
+            return;
+        }
+
+        if (isNaN(debounceDelay) || debounceDelay < 100 || debounceDelay > 2000) {
+            addHistoryLog('防抖延迟必须介于100-2000毫秒之间', 'error');
+            return;
+        }
+
+        if (isNaN(throttleDelay) || throttleDelay < 500 || throttleDelay > 3000) {
+            addHistoryLog('节流延迟必须介于500-3000毫秒之间', 'error');
+            return;
+        }
+
+        if (isNaN(pageLoadWaitTime) || pageLoadWaitTime < 1000 || pageLoadWaitTime > 15000) {
+            addHistoryLog('页面加载等待时间必须介于1000-15000毫秒之间', 'error');
+            return;
+        }
+       
+        if (useTxtApi && txtApiMode === 'api' && !txtApiUrl) {
+            addHistoryLog('请填写TXTAPI链接', 'error');
+            return;
+        }
+       
+        if (useTxtApi && txtApiMode === 'manual' && !txtApiManualText.trim()) {
+            addHistoryLog('请填写手动文本内容', 'error');
+            return;
+        }
+
+        if (enableTargetUser && !targetUsernames.trim()) {
+            addHistoryLog('启用目标用户查找时，必须填写目标用户名', 'error');
+            return;
+        }
+       
+        userConfig.sendTime = timeValue;
+        userConfig.enableTargetUser = enableTargetUser;
+        userConfig.targetUsernames = targetUsernames;
+        userConfig.multiUserMode = multiUserMode;
+        userConfig.multiUserRetrySame = multiUserRetrySame;
+        userConfig.clickMethod = clickMethod;
+        userConfig.pageLoadWaitTime = pageLoadWaitTime;
+        userConfig.useHitokoto = useHitokoto;
+        userConfig.useTxtApi = useTxtApi;
+        userConfig.txtApiMode = txtApiMode;
+        userConfig.txtApiManualRandom = txtApiRandom;
+        userConfig.txtApiUrl = txtApiUrl;
+        userConfig.txtApiManualText = txtApiManualText;
+        userConfig.maxRetryCount = maxRetryCount;
+        userConfig.userSearchTimeout = userSearchTimeout;
+        userConfig.maxHistoryLogs = maxHistoryLogs;
+        userConfig.searchDebounceDelay = debounceDelay;
+        userConfig.searchThrottleDelay = throttleDelay;
+        userConfig.hitokotoFormat = hitokotoFormat;
+        userConfig.fromFormat = fromFormat;
+        userConfig.fromWhoFormat = fromWhoFormat;
+        userConfig.customMessage = customMessage;
+       
+        saveConfig();
+        parseTargetUsers();
+        updateUserStatusDisplay();
+       
+        document.getElementById('dy-fire-settings-panel').remove();
+        addHistoryLog('设置已保存', 'success');
+    }
+
+    // ==================== 初始化函数 ====================
+
     function init() {
         isScriptCat = detectScriptCat();
         initConfig();
         createControlPanel();
        
-        // 检查每日重置
         const today = new Date().toDateString();
         const lastResetDate = GM_getValue('lastResetDate', '');
         if (lastResetDate !== today) {
@@ -1821,7 +2162,6 @@
         updateStatus(isSentToday);
         updateUserStatusDisplay();
 
-        // 确保重新打开按钮初始状态正确
         const reopenBtn = document.getElementById('dy-fire-reopen-btn');
         if (reopenBtn) {
             reopenBtn.style.display = 'none';
@@ -1861,14 +2201,12 @@
                 now.getSeconds() === (targetSecond || 0)) {
                
                 if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
-                    // 多用户模式：检查是否有未发送的用户
                     const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
                     if (unsentUsers.length > 0) {
                         addHistoryLog('定时任务触发发送', 'info');
                         sendMessage();
                     }
                 } else {
-                    // 单用户模式
                     const today = new Date().toDateString();
                     const lastSentDate = GM_getValue('lastSentDate', '');
                    
