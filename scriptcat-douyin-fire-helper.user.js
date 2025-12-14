@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         抖音续火花自动发送助手-集成一言API和TXTAPI-支持多用户
 // @namespace    http://tampermonkey.net/
-// @version      2.3
+// @version      2.3.1
 // @description  每天自动发送续火消息，支持自定义时间，集成一言API和TXTAPI，支持多目标用户
 // @author       飔梦 / 阚泥 / xiaohe123awa
 // @match        https://creator.douyin.com/creator-micro/data/following/chat
@@ -70,7 +70,7 @@
     let currentUserIndex = -1;
     let sentUsersToday = [];
     let allTargetUsers = [];
-    let currentRetryUser = null; // 新增：当前重试用户
+    let currentRetryUser = null;
 
     // 拖动相关变量
     let isDragging = false;
@@ -432,7 +432,7 @@
             addHistoryLog(`重试使用同一用户: ${currentTargetUser}`, 'info');
         } else {
             currentTargetUser = getNextTargetUser();
-            currentRetryUser = currentTargetUser; // 保存当前重试用户
+            currentRetryUser = currentTargetUser;
         }
 
         if (!currentTargetUser) {
@@ -620,7 +620,7 @@
             isProcessing = false;
             currentState = 'idle';
             stopChatObserver();
-            currentRetryUser = null; // 重置重试用户
+            currentRetryUser = null;
             return;
         }
 
@@ -659,7 +659,7 @@
 
         const input = document.querySelector('.chat-input-dccKiL');
         if (input) {
-            chatInputRetryCount = 0; // 重置重试计数
+            chatInputRetryCount = 0;
             addHistoryLog('找到聊天输入框', 'info');
             
             let messageToSend;
@@ -702,7 +702,6 @@
                         } else {
                             const today = new Date().toDateString();
                             GM_setValue('lastSentDate', today);
-                            // 修复：单用户模式下发送成功后更新进度显示
                             updateUserStatusDisplay();
                         }
                         
@@ -710,7 +709,7 @@
                         isProcessing = false;
                         currentState = 'idle';
                         stopChatObserver();
-                        currentRetryUser = null; // 重置重试用户
+                        currentRetryUser = null;
                         
                         if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
                             const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
@@ -743,7 +742,6 @@
             chatInputRetryCount++;
             addHistoryLog(`未找到输入框，继续查找中... (${chatInputRetryCount}/${userConfig.maxRetryCount})`, 'info');
             
-            // 检查是否超过最大重试次数
             if (chatInputRetryCount >= userConfig.maxRetryCount) {
                 addHistoryLog(`查找聊天输入框超过最大重试次数 (${userConfig.maxRetryCount})，触发重试流程`, 'error');
                 chatInputRetryCount = 0;
@@ -1007,10 +1005,31 @@
             nextEl.textContent = nextSendTime.toLocaleString();
         }
         
-        // 只有在非发送状态时才更新倒计时，避免发送中倒计时继续更新
         if (status !== 'sending') {
             startCountdown(nextSendTime);
         }
+    }
+
+    // 检查是否需要为新的一天重置记录
+    function checkIfShouldResetForNewDay() {
+        const today = new Date().toDateString();
+        const lastResetDate = GM_getValue('lastResetDate', '');
+        
+        if (lastResetDate !== today) {
+            return true;
+        }
+        
+        if (sentUsersToday.length > 0) {
+            const firstSendTime = GM_getValue('firstSendTimeToday', 0);
+            if (firstSendTime > 0) {
+                const firstSendDate = new Date(firstSendTime).toDateString();
+                if (firstSendDate !== today) {
+                    return true;
+                }
+            }
+        }
+        
+        return false;
     }
 
     // 检查是否需要自动发送
@@ -1019,6 +1038,14 @@
         const today = new Date().toDateString();
        
         if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
+            // 检查是否需要为新的一天重置记录
+            const shouldResetForNewDay = checkIfShouldResetForNewDay();
+            
+            if (shouldResetForNewDay) {
+                addHistoryLog('新的一天开始，重置今日发送记录', 'info');
+                resetTodaySentUsers();
+            }
+            
             const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
             if (unsentUsers.length > 0 && !isProcessing) {
                 const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
@@ -1062,10 +1089,16 @@
                     countdownEl.textContent = '00:00:00';
                 }
                
-                // 立即更新状态为"发送中"
                 updateStatus('sending');
                 
                 if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
+                    // 检查是否需要为新的一天重置记录
+                    const shouldResetForNewDay = checkIfShouldResetForNewDay();
+                    if (shouldResetForNewDay) {
+                        addHistoryLog('新的一天开始，重置今日发送记录', 'info');
+                        resetTodaySentUsers();
+                    }
+                    
                     const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
                     if (unsentUsers.length > 0) {
                         if (!isProcessing) {
@@ -1073,14 +1106,16 @@
                             sendMessage();
                         }
                     } else {
+                        // 所有用户已完成，记录重置日期
+                        GM_setValue('lastResetDate', new Date().toDateString());
                         nextSendTime = parseTimeString(userConfig.sendTime);
                         const tomorrow = new Date(now);
                         tomorrow.setDate(tomorrow.getDate() + 1);
                         if (nextSendTime.getDate() !== tomorrow.getDate()) {
-                            nextSendTime.setDate(tomorrow.getDate());
+                            nextSendTime.setDate(nextSendTime.getDate() + 1);
                         }
                         startCountdown(nextSendTime);
-                        updateStatus(true); // 所有用户已完成
+                        updateStatus(true);
                     }
                 } else {
                     const lastSentDate = GM_getValue('lastSentDate', '');
@@ -1094,7 +1129,7 @@
                             nextSendTime.setDate(tomorrow.getDate());
                         }
                         startCountdown(nextSendTime);
-                        updateStatus(true); // 今日已发送
+                        updateStatus(true);
                     } else {
                         if (!isProcessing) {
                             GM_setValue('lastSentDate', '');
@@ -1128,7 +1163,7 @@
         GM_setValue('txtApiManualSentIndexes', []);
         GM_setValue('lastTargetUser', '');
         resetTodaySentUsers();
-        currentRetryUser = null; // 新增
+        currentRetryUser = null;
         addHistoryLog('发送记录已清空', 'info');
         updateStatus(false);
         retryCount = 0;
@@ -1158,6 +1193,7 @@
                 GM_setValue('sentUsersToday', []);
                 GM_setValue('currentUserIndex', -1);
                 GM_setValue('lastTargetUser', '');
+                GM_setValue('lastResetDate', '');
             }
         } else {
             GM_setValue('lastSentDate', '');
@@ -1167,10 +1203,11 @@
             GM_setValue('sentUsersToday', []);
             GM_setValue('currentUserIndex', -1);
             GM_setValue('lastTargetUser', '');
+            GM_setValue('lastResetDate', '');
         }
        
         initConfig();
-        currentRetryUser = null; // 新增
+        currentRetryUser = null;
         addHistoryLog('所有配置已重置', 'info');
         updateStatus(false);
         retryCount = 0;
@@ -1245,7 +1282,12 @@
         currentUserIndex = -1;
         GM_setValue('currentUserIndex', -1);
         GM_setValue('lastSentDate', '');
-        currentRetryUser = null; // 新增
+        currentRetryUser = null;
+        
+        // 记录重置日期
+        const today = new Date().toDateString();
+        GM_setValue('lastResetDate', today);
+        
         addHistoryLog('今日发送记录已重置', 'info');
         updateUserStatusDisplay();
     }
@@ -1456,14 +1498,11 @@
             currentPanel = panel;
             
             const rect = panel.getBoundingClientRect();
-            // 修复拖动偏移计算
             dragOffsetX = e.clientX - rect.left;
             dragOffsetY = e.clientY - rect.top;
             
-            // 移除transform定位，改用left/top定位
             if (panel.style.transform && panel.style.transform.includes('translate')) {
                 panel.style.transform = 'none';
-                // 设置初始位置
                 panel.style.left = rect.left + 'px';
                 panel.style.top = rect.top + 'px';
                 panel.style.right = 'auto';
@@ -1568,7 +1607,6 @@
 
         const historyPanel = document.createElement('div');
         historyPanel.id = 'dy-fire-history-panel';
-        // 修复：使用left/top定位替代transform
         historyPanel.style.cssText = `
             position: fixed;
             top: 50%;
@@ -1685,7 +1723,6 @@
 
         const settingsPanel = document.createElement('div');
         settingsPanel.id = 'dy-fire-settings-panel';
-        // 修复：使用left/top定位替代transform
         settingsPanel.style.cssText = `
             position: fixed;
             top: 50%;
@@ -2170,7 +2207,6 @@
         const lastResetDate = GM_getValue('lastResetDate', '');
         if (lastResetDate !== today) {
             resetTodaySentUsers();
-            GM_setValue('lastResetDate', today);
         }
        
         const lastSentDate = GM_getValue('lastSentDate', '');
