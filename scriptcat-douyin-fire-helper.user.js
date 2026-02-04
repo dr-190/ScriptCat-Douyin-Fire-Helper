@@ -45,7 +45,7 @@
         fromWhoFormat: "「{from_who}」",
         txtApiUrl: "https://v1.hitokoto.cn/?encode=text",
         txtApiManualText: "文本1\n文本2\n文本3",
-        enableTargetUser: false,
+        enableTargetUser: false,  // 这个值会根据目标用户列表自动调整
         targetUsernames: "",
         userSearchTimeout: 10000,
         maxHistoryLogs: 200,
@@ -57,7 +57,6 @@
         multiUserMode: "sequential",
         multiUserRetrySame: false,
         fireDays: 1,
-        lastFireDate: "",
         specialHitokotoMonday: "周一专属文案1\n周一专属文案2",
         specialHitokotoTuesday: "周二专属文案1\n周二专属文案2",
         specialHitokotoWednesday: "周三专属文案1\n周三专属文案2",
@@ -138,13 +137,10 @@
             userConfig.fireDays = GM_getValue('fireDays');
         }
 
-        // 初始化上次火花日期
+        // 初始化最后发送日期（用于判断是否为新的一天）
         if (!GM_getValue('lastFireDate')) {
-            const today = new Date().toISOString().split('T')[0];
+            const today = new Date().toDateString();
             GM_setValue('lastFireDate', today);
-            userConfig.lastFireDate = today;
-        } else {
-            userConfig.lastFireDate = GM_getValue('lastFireDate');
         }
 
         // 初始化专属一言发送记录
@@ -165,32 +161,47 @@
         }
         currentUserIndex = GM_getValue('currentUserIndex', -1);
         
-        // 解析目标用户列表
+        // 解析目标用户列表并自动设置enableTargetUser
         parseTargetUsers();
        
         GM_setValue('userConfig', userConfig);
         return userConfig;
     }
 
-    // 解析目标用户列表
+    // 解析目标用户列表并自动设置enableTargetUser
     function parseTargetUsers() {
         if (!userConfig.targetUsernames || !userConfig.targetUsernames.trim()) {
             allTargetUsers = [];
-            userConfig.enableTargetUser = false; // 目标用户为空时自动关闭
+            userConfig.enableTargetUser = false;  // 无目标用户时自动关闭
+            saveConfig();
             return;
         }
         
         const rawText = userConfig.targetUsernames.trim();
-        allTargetUsers = rawText.split('\n')
+        allTargetUsers = rawText.split(/[,|\n]/)
             .map(user => user.trim())
             .filter(user => user.length > 0);
-            
-        // 目标用户不为空时自动开启
+        
+        // 有目标用户时自动开启
         if (allTargetUsers.length > 0) {
             userConfig.enableTargetUser = true;
+            saveConfig();
+        } else {
+            userConfig.enableTargetUser = false;
+            saveConfig();
         }
             
         addHistoryLog(`解析到 ${allTargetUsers.length} 个目标用户: ${allTargetUsers.join(', ')}`, 'info');
+    }
+
+    // 更新enableTargetUser状态（当目标用户列表变化时调用）
+    function updateEnableTargetUserStatus() {
+        if (allTargetUsers.length === 0) {
+            userConfig.enableTargetUser = false;
+        } else {
+            userConfig.enableTargetUser = true;
+        }
+        saveConfig();
     }
 
     // 获取下一个目标用户
@@ -257,7 +268,6 @@
     function saveConfig() {
         GM_setValue('userConfig', userConfig);
         GM_setValue('fireDays', userConfig.fireDays);
-        GM_setValue('lastFireDate', userConfig.lastFireDate);
         GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
     }
 
@@ -375,22 +385,6 @@
         if (statusEl) {
             statusEl.textContent = userConfig.fireDays;
             statusEl.style.color = '#00d8b8';
-        }
-    }
-
-    // 更新火花天数（每天第一次发送时调用）
-    function updateFireDays() {
-        const today = new Date().toISOString().split('T')[0];
-        const lastFireDate = userConfig.lastFireDate || '';
-        
-        if (lastFireDate !== today) {
-            // 新的一天，增加天数
-            userConfig.fireDays++;
-            userConfig.lastFireDate = today;
-            GM_setValue('fireDays', userConfig.fireDays);
-            GM_setValue('lastFireDate', today);
-            addHistoryLog(`新的一天开始，火花天数增加为: ${userConfig.fireDays}`, 'success');
-            updateFireDaysStatus();
         }
     }
 
@@ -786,8 +780,22 @@
                     setTimeout(() => {
                         addHistoryLog('消息发送成功！', 'success');
                         
-                        // 更新火花天数（如果是今天第一次发送）
-                        updateFireDays();
+                        // 更新火花天数（按天增加，不是按发送次数）
+                        const today = new Date().toDateString();
+                        const lastFireDate = GM_getValue('lastFireDate', '');
+                        
+                        if (lastFireDate !== today) {
+                            // 新的一天，增加天数
+                            userConfig.fireDays++;
+                            GM_setValue('fireDays', userConfig.fireDays);
+                            GM_setValue('lastFireDate', today);
+                            addHistoryLog(`火花天数已更新为: ${userConfig.fireDays}`, 'success');
+                        } else {
+                            // 同一天，不增加天数
+                            addHistoryLog('今天已发送过，火花天数不变', 'info');
+                        }
+                        
+                        updateFireDaysStatus();
                         
                         if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
                             const currentTargetUser = GM_getValue('lastTargetUser', '');
@@ -1203,20 +1211,25 @@
 
     // 更新状态
     function updateStatus(status) {
-        const statusEl = document.getElementById('dy-fire-status');
-        if (statusEl) {
-            if (status === true) {
-                statusEl.textContent = '已发送';
-                statusEl.style.color = '#00d8b8';
-            } else if (status === false) {
-                statusEl.textContent = '未发送';
-                statusEl.style.color = '#dc3545';
-                autoSendIfNeeded();
-            } else if (status === 'sending') {
-                statusEl.textContent = '发送中';
-                statusEl.style.color = '#ffc107';
-            }
-        }
+    const statusEl = document.getElementById('dy-fire-status');
+    if (statusEl) {
+        statusEl.textContent = '未发送';
+        statusEl.style.color = '#dc3545';
+    }
+    
+    retryCount = 0;
+    updateRetryCount();
+    updateHitokotoStatus('未获取');
+    updateTxtApiStatus('未获取');
+    updateSpecialHitokotoStatus('未获取');
+    updateFireDaysStatus();
+    updateUserStatusDisplay();
+    stopChatObserver();
+    
+    if (chatInputCheckTimer) {
+        clearTimeout(chatInputCheckTimer);
+        chatInputCheckTimer = null;
+    }
        
         const now = new Date();
        
@@ -1451,19 +1464,49 @@
         GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
         resetTodaySentUsers();
         currentRetryUser = null;
+        isProcessing = false;
+        currentState = 'idle';
         addHistoryLog('发送记录已清空', 'info');
-        updateStatus(false);
-        retryCount = 0;
-        updateRetryCount();
-        updateHitokotoStatus('未获取');
-        updateTxtApiStatus('未获取');
-        updateSpecialHitokotoStatus('未获取');
-        updateUserStatusDisplay();
-        stopChatObserver();
-        if (chatInputCheckTimer) {
-            clearTimeout(chatInputCheckTimer);
-        }
+    const statusEl = document.getElementById('dy-fire-status');
+    if (statusEl) {
+        statusEl.textContent = '未发送';
+        statusEl.style.color = '#dc3545';
     }
+    
+    retryCount = 0;
+    updateRetryCount();
+    updateHitokotoStatus('未获取');
+    updateTxtApiStatus('未获取');
+    updateSpecialHitokotoStatus('未获取');
+    updateUserStatusDisplay();
+    stopChatObserver();
+    
+    if (chatInputCheckTimer) {
+        clearTimeout(chatInputCheckTimer);
+        chatInputCheckTimer = null;
+    }
+    
+    // 重新计算下次发送时间并开始倒计时
+    nextSendTime = parseRandomTimeString();
+    const now = new Date();
+    if (nextSendTime <= now) {
+        nextSendTime.setDate(nextSendTime.getDate() + 1);
+    }
+    
+    const nextEl = document.getElementById('dy-fire-next');
+    if (nextEl) {
+        nextEl.textContent = nextSendTime.toLocaleString();
+    }
+    
+    startCountdown(nextSendTime);
+    
+    // 触发自动发送检查
+    setTimeout(() => {
+        autoSendIfNeeded();
+    }, 1000);
+    
+    addHistoryLog('状态已重置，将重新检查是否需要自动发送', 'info');
+}
 
     // 重置所有配置
     function resetAllConfig() {
@@ -1483,7 +1526,7 @@
                 GM_setValue('lastTargetUser', '');
                 GM_setValue('lastResetDate', '');
                 GM_setValue('fireDays', 1);
-                GM_setValue('lastFireDate', new Date().toISOString().split('T')[0]);
+                GM_setValue('lastFireDate', '');
                 GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
             }
         } else {
@@ -1496,12 +1539,14 @@
             GM_setValue('lastTargetUser', '');
             GM_setValue('lastResetDate', '');
             GM_setValue('fireDays', 1);
-            GM_setValue('lastFireDate', new Date().toISOString().split('T')[0]);
+            GM_setValue('lastFireDate', '');
             GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
         }
        
         initConfig();
         currentRetryUser = null;
+        isProcessing = false;
+        currentState = 'idle';
         addHistoryLog('所有配置已重置', 'info');
         updateStatus(false);
         retryCount = 0;
@@ -1606,7 +1651,7 @@
         }
     }
 
-    // 解析当前聊天列表的用户
+    // 解析当前聊天列表的用户（排除已添加的用户）
     function parseCurrentChatUsers() {
         const userElements = document.querySelectorAll('.item-header-name-vL_79m');
         const users = [];
@@ -1614,7 +1659,10 @@
         userElements.forEach(element => {
             const username = element.textContent.trim();
             if (username && !users.includes(username)) {
-                users.push(username);
+                // 排除已经添加的用户
+                if (!allTargetUsers.includes(username)) {
+                    users.push(username);
+                }
             }
         });
         
@@ -1632,16 +1680,8 @@
         const currentUsers = parseCurrentChatUsers();
         
         if (currentUsers.length === 0) {
-            addHistoryLog('未找到聊天列表中的用户', 'warn');
+            addHistoryLog('未找到聊天列表中的新用户（已添加的用户已过滤）', 'warn');
             return;
-        }
-
-        // 获取现有目标用户
-        let currentTargetUsers = [];
-        if (userConfig.targetUsernames && userConfig.targetUsernames.trim()) {
-            currentTargetUsers = userConfig.targetUsernames.split('\n')
-                .map(user => user.trim())
-                .filter(user => user.length > 0);
         }
 
         const userSelectPanel = document.createElement('div');
@@ -1666,16 +1706,14 @@
             border: 1px solid rgba(255,255,255,0.1);
         `;
 
-        const userCheckboxes = currentUsers.map(user => {
-            const isChecked = currentTargetUsers.includes(user);
-            return `
+        const userCheckboxes = currentUsers.map(user => `
             <div style="padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05);">
                 <label style="display: flex; align-items: center; cursor: pointer;">
-                    <input type="checkbox" class="user-checkbox" value="${user}" ${isChecked ? 'checked' : ''} style="margin-right: 10px;">
+                    <input type="checkbox" class="user-checkbox" value="${user}" style="margin-right: 10px;">
                     <span style="color: #fff; font-size: 14px;">${user}</span>
                 </label>
             </div>
-        `}).join('');
+        `).join('');
 
         userSelectPanel.innerHTML = `
             <div id="dy-fire-user-select-header" style="padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); cursor: move;">
@@ -1685,6 +1723,7 @@
                     </h3>
                     <button id="dy-fire-user-select-close" style="background: rgba(255,255,255,0.1); border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; color: #fff; font-size: 18px; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;">×</button>
                 </div>
+                <div style="font-size: 12px; color: #999; margin-top: 5px;">已添加的用户不显示在此列表中</div>
             </div>
             
             <div style="padding: 15px 20px; border-bottom: 1px solid rgba(255,255,255,0.1);">
@@ -1705,7 +1744,7 @@
             <div style="padding: 20px; border-top: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2);">
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
                     <button id="dy-fire-user-select-add" style="padding: 12px; background: linear-gradient(135deg, #00d8b8 0%, #00b8a8 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s ease;">
-                        ✅ 更新目标用户
+                        ✅ 添加到目标用户
                     </button>
                     <button id="dy-fire-user-select-cancel" style="padding: 12px; background: linear-gradient(135deg, #ff2c54 0%, #ff6b8b 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s ease;">
                         ❌ 取消
@@ -1740,29 +1779,40 @@
             });
         });
 
-        // 更新目标用户
+        // 添加到目标用户
         addBtn.addEventListener('click', function() {
-            const checkboxes = userSelectPanel.querySelectorAll('.user-checkbox');
-            const selectedUsers = [];
+            const checkboxes = userSelectPanel.querySelectorAll('.user-checkbox:checked');
+            const selectedUsers = Array.from(checkboxes).map(cb => cb.value);
             
-            checkboxes.forEach(checkbox => {
-                if (checkbox.checked) {
-                    selectedUsers.push(checkbox.value);
+            if (selectedUsers.length === 0) {
+                addHistoryLog('未选择任何用户', 'warn');
+                return;
+            }
+            
+            // 获取现有目标用户
+            let currentTargetUsers = [];
+            if (userConfig.targetUsernames && userConfig.targetUsernames.trim()) {
+                currentTargetUsers = userConfig.targetUsernames.split(/[,|\n]/)
+                    .map(user => user.trim())
+                    .filter(user => user.length > 0);
+            }
+            
+            // 添加新用户（去重）
+            let addedCount = 0;
+            selectedUsers.forEach(user => {
+                if (!currentTargetUsers.includes(user)) {
+                    currentTargetUsers.push(user);
+                    addedCount++;
                 }
             });
             
             // 更新配置
-            userConfig.targetUsernames = selectedUsers.join('\n');
+            userConfig.targetUsernames = currentTargetUsers.join('\n');
             saveConfig();
-            parseTargetUsers(); // 这会自动设置enableTargetUser
+            parseTargetUsers();
             updateUserStatusDisplay();
             
-            if (selectedUsers.length > 0) {
-                addHistoryLog(`已更新 ${selectedUsers.length} 个目标用户`, 'success');
-            } else {
-                addHistoryLog('已清空目标用户列表', 'info');
-            }
-            
+            addHistoryLog(`已添加 ${addedCount} 个用户到目标列表`, 'success');
             userSelectPanel.remove();
         });
 
@@ -1803,11 +1853,7 @@
             const days = parseInt(newDays, 10);
             if (!isNaN(days) && days >= 0) {
                 userConfig.fireDays = days;
-                // 修改天数时更新最后火花日期为今天，避免今天重复增加
-                const today = new Date().toISOString().split('T')[0];
-                userConfig.lastFireDate = today;
                 GM_setValue('fireDays', days);
-                GM_setValue('lastFireDate', today);
                 updateFireDaysStatus();
                 addHistoryLog(`火花天数已修改为: ${days}`, 'success');
             } else {
@@ -1861,7 +1907,7 @@
                     </div>
                     <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
                         <div style="color: #999; margin-bottom: 4px;">用户状态</div>
-                        <div id="dy-fire-user-status" style="color: #999; font-weight: 600; font-size: 13px;">${userConfig.enableTargetUser ? '已启用' : '未启用'}</div>
+                        <div id="dy-fire-user-status" style="color: #999; font-weight: 600; font-size: 13px;">未启用</div>
                     </div>
                     <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
                         <div style="color: #999; margin-bottom: 4px;">发送进度</div>
@@ -2466,15 +2512,16 @@
                             <h4 style="color: #fff; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">👥 用户设置</h4>
                             <div style="margin-bottom: 15px;">
                                 <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 15px;">
-                                    <input type="checkbox" id="dy-fire-settings-enable-target" ${userConfig.enableTargetUser ? 'checked' : ''} style="margin-right: 10px;" disabled>
-                                    <span style="color: #ccc;">启用目标用户查找（自动根据目标用户列表状态设置）</span>
+                                    <input type="checkbox" id="dy-fire-settings-enable-target" ${userConfig.enableTargetUser ? 'checked' : ''} style="margin-right: 10px;">
+                                    <span style="color: #ccc;">启用目标用户查找</span>
                                 </label>
+                                <div style="font-size: 12px; color: #999; margin-top: 5px;">注意：当目标用户列表不为空时，此选项会自动启用；当目标用户列表为空时，此选项会自动关闭</div>
                             </div>
 
-                            <div id="target-user-container" style="margin-bottom: 15px;">
-                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">目标用户名（一行一个）</label>
-                                <textarea id="dy-fire-settings-target-user" style="width: 100%; height: 100px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;" placeholder="每行一个用户名">${userConfig.targetUsernames}</textarea>
-                                <div style="font-size: 12px; color: #999; margin-top: 5px;">每行一个用户名，列表不为空时自动启用目标用户查找</div>
+                            <div id="target-user-container" style="margin-bottom: 15px; ${userConfig.enableTargetUser ? '' : 'display: none;'}">
+                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">目标用户名（支持单个或多个用户，用逗号、竖线或换行分隔）</label>
+                                <textarea id="dy-fire-settings-target-user" style="width: 100%; height: 100px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;" placeholder="例如: 用户1&#10;或: 用户1, 用户2 | 用户3">${userConfig.targetUsernames}</textarea>
+                                <div style="font-size: 12px; color: #999; margin-top: 5px;">启用后会自动在聊天列表中查找指定用户并点击，支持单个或多个用户</div>
                                 
                                 <div style="margin-top: 15px;">
                                     <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">用户发送模式</label>
@@ -2651,6 +2698,10 @@
             document.getElementById('random-time-container').style.display = isRandom ? 'block' : 'none';
         });
 
+        document.getElementById('dy-fire-settings-enable-target').addEventListener('change', function() {
+            document.getElementById('target-user-container').style.display = this.checked ? 'block' : 'none';
+        });
+
         const modeRadios = document.querySelectorAll('input[name="txt-api-mode"]');
         modeRadios.forEach(radio => {
             radio.addEventListener('change', function() {
@@ -2704,6 +2755,7 @@
         const timeValue = document.getElementById('dy-fire-settings-time').value;
         const timeStart = document.getElementById('dy-fire-settings-time-start').value;
         const timeEnd = document.getElementById('dy-fire-settings-time-end').value;
+        const enableTargetUser = document.getElementById('dy-fire-settings-enable-target').checked;
         const targetUsernames = document.getElementById('dy-fire-settings-target-user').value;
         const multiUserMode = document.querySelector('input[name="multi-user-mode"]:checked').value;
         const multiUserRetrySame = document.getElementById('dy-fire-settings-multi-retry-same').checked;
@@ -2790,6 +2842,11 @@
             addHistoryLog('请填写手动文本内容', 'error');
             return;
         }
+
+        if (enableTargetUser && !targetUsernames.trim()) {
+            addHistoryLog('启用目标用户查找时，必须填写目标用户名', 'error');
+            return;
+        }
        
         userConfig.sendTimeRandom = timeRandom;
         userConfig.sendTime = timeValue;
@@ -2826,13 +2883,11 @@
         userConfig.specialHitokotoFriday = specialFriday;
         userConfig.specialHitokotoSaturday = specialSaturday;
         userConfig.specialHitokotoSunday = specialSunday;
-       
+        
         // 自动设置enableTargetUser
-        const targetUsers = targetUsernames.trim().split('\n').filter(user => user.trim().length > 0);
-        userConfig.enableTargetUser = targetUsers.length > 0;
+        parseTargetUsers();
        
         saveConfig();
-        parseTargetUsers();
         updateUserStatusDisplay();
        
         // 重置倒计时
