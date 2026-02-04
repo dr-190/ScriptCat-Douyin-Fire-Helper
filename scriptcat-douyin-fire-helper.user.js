@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         抖音续火花自动发送助手-集成一言API和TXTAPI-支持多用户
+// @name         抖音续火花自动发送助手-集成一言API和TXTAPI-支持多用户-增强版
 // @namespace    http://tampermonkey.net/
-// @version      2.3.1
-// @description  每天自动发送续火消息，支持自定义时间，集成一言API和TXTAPI，支持多目标用户
+// @version      3.0.0
+// @description  每天自动发送续火消息，支持自定义时间，集成一言API和TXTAPI，支持多目标用户，记录火花天数，专属一言，随机发送时间，用户列表解析
 // @author       飔梦 / 阚泥 / xiaohe123awa
 // @match        https://creator.douyin.com/creator-micro/data/following/chat
 // @icon         https://free.picui.cn/free/2025/11/23/69226264aca4e.png
@@ -24,6 +24,9 @@
     const DEFAULT_CONFIG = {
         baseMessage: "续火",
         sendTime: "00:01:00",
+        sendTimeRandom: false,
+        sendTimeRangeStart: "23:30:00",
+        sendTimeRangeEnd: "00:30:00",
         checkInterval: 1000,
         maxWaitTime: 30000,
         maxRetryCount: 3,
@@ -31,9 +34,12 @@
         txtApiTimeout: 60000,
         useHitokoto: true,
         useTxtApi: true,
+        useSpecialHitokoto: true,
+        specialHitokotoMode: "random",
+        specialHitokotoRandom: true,
         txtApiMode: "manual",
         txtApiManualRandom: true,
-        customMessage: "—————每日续火—————\n\n[TXTAPI]\n\n—————每日一言—————\n\n[API]\n",
+        customMessage: "—————每日续火—————\n\n[TXTAPI]\n\n—————每日一言—————\n\n[API]\n\n—————专属一言—————\n\n[专属一言]\n\n🔥 火花已续 [天数] 天",
         hitokotoFormat: "{hitokoto}\n—— {from}{from_who}",
         fromFormat: "{from}",
         fromWhoFormat: "「{from_who}」",
@@ -49,7 +55,16 @@
         pageLoadWaitTime: 5000,
         chatInputCheckInterval: 1000,
         multiUserMode: "sequential",
-        multiUserRetrySame: false
+        multiUserRetrySame: false,
+        fireDays: 1,
+        lastFireDate: "",
+        specialHitokotoMonday: "周一专属文案1\n周一专属文案2",
+        specialHitokotoTuesday: "周二专属文案1\n周二专属文案2",
+        specialHitokotoWednesday: "周三专属文案1\n周三专属文案2",
+        specialHitokotoThursday: "周四专属文案1\n周四专属文案2",
+        specialHitokotoFriday: "周五专属文案1\n周五专属文案2",
+        specialHitokotoSaturday: "周六专属文案1\n周六专属文案2",
+        specialHitokotoSunday: "周日专属文案1\n周日专属文案2"
     };
 
     // 状态变量
@@ -71,6 +86,17 @@
     let sentUsersToday = [];
     let allTargetUsers = [];
     let currentRetryUser = null;
+
+    // 专属一言发送记录
+    let specialHitokotoSentIndexes = {
+        monday: [],
+        tuesday: [],
+        wednesday: [],
+        thursday: [],
+        friday: [],
+        saturday: [],
+        sunday: []
+    };
 
     // 拖动相关变量
     let isDragging = false;
@@ -104,6 +130,29 @@
         if (!GM_getValue('historyLogs')) {
             GM_setValue('historyLogs', []);
         }
+
+        // 初始化火花天数
+        if (!GM_getValue('fireDays')) {
+            GM_setValue('fireDays', userConfig.fireDays);
+        } else {
+            userConfig.fireDays = GM_getValue('fireDays');
+        }
+
+        // 初始化上次火花日期
+        if (!GM_getValue('lastFireDate')) {
+            const today = new Date().toISOString().split('T')[0];
+            GM_setValue('lastFireDate', today);
+            userConfig.lastFireDate = today;
+        } else {
+            userConfig.lastFireDate = GM_getValue('lastFireDate');
+        }
+
+        // 初始化专属一言发送记录
+        if (!GM_getValue('specialHitokotoSentIndexes')) {
+            GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
+        } else {
+            specialHitokotoSentIndexes = GM_getValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
+        }
        
         // 初始化多用户数据
         if (!GM_getValue('sentUsersToday')) {
@@ -127,13 +176,19 @@
     function parseTargetUsers() {
         if (!userConfig.targetUsernames || !userConfig.targetUsernames.trim()) {
             allTargetUsers = [];
+            userConfig.enableTargetUser = false; // 目标用户为空时自动关闭
             return;
         }
         
         const rawText = userConfig.targetUsernames.trim();
-        allTargetUsers = rawText.split(/[,|\n]/)
+        allTargetUsers = rawText.split('\n')
             .map(user => user.trim())
             .filter(user => user.length > 0);
+            
+        // 目标用户不为空时自动开启
+        if (allTargetUsers.length > 0) {
+            userConfig.enableTargetUser = true;
+        }
             
         addHistoryLog(`解析到 ${allTargetUsers.length} 个目标用户: ${allTargetUsers.join(', ')}`, 'info');
     }
@@ -201,6 +256,9 @@
     // 保存配置
     function saveConfig() {
         GM_setValue('userConfig', userConfig);
+        GM_setValue('fireDays', userConfig.fireDays);
+        GM_setValue('lastFireDate', userConfig.lastFireDate);
+        GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
     }
 
     // 添加历史日志
@@ -299,6 +357,40 @@
         if (statusEl) {
             statusEl.textContent = status;
             statusEl.style.color = isSuccess ? '#00d8b8' : '#ff2c54';
+        }
+    }
+
+    // 更新专属一言状态显示
+    function updateSpecialHitokotoStatus(status, isSuccess = true) {
+        const statusEl = document.getElementById('dy-fire-special-hitokoto');
+        if (statusEl) {
+            statusEl.textContent = status;
+            statusEl.style.color = isSuccess ? '#00d8b8' : '#ff2c54';
+        }
+    }
+
+    // 更新火花天数显示
+    function updateFireDaysStatus() {
+        const statusEl = document.getElementById('dy-fire-days');
+        if (statusEl) {
+            statusEl.textContent = userConfig.fireDays;
+            statusEl.style.color = '#00d8b8';
+        }
+    }
+
+    // 更新火花天数（每天第一次发送时调用）
+    function updateFireDays() {
+        const today = new Date().toISOString().split('T')[0];
+        const lastFireDate = userConfig.lastFireDate || '';
+        
+        if (lastFireDate !== today) {
+            // 新的一天，增加天数
+            userConfig.fireDays++;
+            userConfig.lastFireDate = today;
+            GM_setValue('fireDays', userConfig.fireDays);
+            GM_setValue('lastFireDate', today);
+            addHistoryLog(`新的一天开始，火花天数增加为: ${userConfig.fireDays}`, 'success');
+            updateFireDaysStatus();
         }
     }
 
@@ -694,6 +786,9 @@
                     setTimeout(() => {
                         addHistoryLog('消息发送成功！', 'success');
                         
+                        // 更新火花天数（如果是今天第一次发送）
+                        updateFireDays();
+                        
                         if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
                             const currentTargetUser = GM_getValue('lastTargetUser', '');
                             if (currentTargetUser) {
@@ -783,6 +878,19 @@
             }
         }
         
+        let specialHitokotoContent = '';
+        if (userConfig.useSpecialHitokoto) {
+            try {
+                addHistoryLog('正在获取专属一言内容...', 'info');
+                specialHitokotoContent = await getSpecialHitokoto();
+                addHistoryLog('专属一言内容获取成功', 'success');
+            } catch (error) {
+                addHistoryLog(`专属一言获取失败: ${error.message}`, 'error');
+                specialHitokotoContent = '专属一言获取失败~';
+            }
+        }
+        
+        // 替换占位符
         if (customMessage.includes('[API]')) {
             customMessage = customMessage.replace('[API]', hitokotoContent);
         } else if (userConfig.useHitokoto) {
@@ -793,6 +901,16 @@
             customMessage = customMessage.replace('[TXTAPI]', txtApiContent);
         } else if (userConfig.useTxtApi) {
             customMessage += ` | ${txtApiContent}`;
+        }
+        
+        if (customMessage.includes('[专属一言]')) {
+            customMessage = customMessage.replace('[专属一言]', specialHitokotoContent);
+        } else if (userConfig.useSpecialHitokoto) {
+            customMessage += ` | ${specialHitokotoContent}`;
+        }
+        
+        if (customMessage.includes('[天数]')) {
+            customMessage = customMessage.replace('[天数]', userConfig.fireDays || 1);
         }
         
         return customMessage;
@@ -858,6 +976,81 @@
         result = result.replace(/{from_who}/g, fromWhoFormatted);
         
         return result;
+    }
+
+    // 获取专属一言内容
+    function getSpecialHitokoto() {
+        return new Promise((resolve, reject) => {
+            try {
+                const now = new Date();
+                const dayOfWeek = now.getDay(); // 0=周日, 1=周一, ..., 6=周六
+                
+                // 转换为我们的键名
+                const dayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+                const currentDayKey = dayKeys[dayOfWeek];
+                const dayName = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][dayOfWeek];
+                
+                // 获取对应日期的文本
+                const text = userConfig[`specialHitokoto${currentDayKey.charAt(0).toUpperCase() + currentDayKey.slice(1)}`] || '';
+                const lines = text.split('\n').filter(line => line.trim());
+                
+                if (lines.length === 0) {
+                    updateSpecialHitokotoStatus(`${dayName}无内容`, false);
+                    resolve(`${dayName}暂无专属一言`);
+                    return;
+                }
+                
+                // 获取该日期的发送记录
+                const sentIndexes = specialHitokotoSentIndexes[currentDayKey] || [];
+                
+                let selectedIndex;
+                let selectedText;
+                
+                if (userConfig.specialHitokotoRandom) {
+                    // 随机模式
+                    let availableIndexes = [];
+                    for (let i = 0; i < lines.length; i++) {
+                        if (!sentIndexes.includes(i)) {
+                            availableIndexes.push(i);
+                        }
+                    }
+                    
+                    if (availableIndexes.length === 0) {
+                        // 所有都发送过了，重置
+                        specialHitokotoSentIndexes[currentDayKey] = [];
+                        sentIndexes.length = 0;
+                        availableIndexes = Array.from({length: lines.length}, (_, i) => i);
+                    }
+                    
+                    const randomIndex = Math.floor(Math.random() * availableIndexes.length);
+                    selectedIndex = availableIndexes[randomIndex];
+                    selectedText = lines[selectedIndex].trim();
+                    
+                    // 记录发送
+                    specialHitokotoSentIndexes[currentDayKey].push(selectedIndex);
+                    GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
+                } else {
+                    // 顺序模式
+                    let nextIndex = 0;
+                    if (sentIndexes.length > 0) {
+                        nextIndex = (sentIndexes[sentIndexes.length - 1] + 1) % lines.length;
+                    }
+                    
+                    selectedIndex = nextIndex;
+                    selectedText = lines[selectedIndex].trim();
+                    
+                    // 记录发送
+                    specialHitokotoSentIndexes[currentDayKey].push(selectedIndex);
+                    GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
+                }
+                
+                updateSpecialHitokotoStatus(`${dayName}获取成功`);
+                resolve(`${dayName}专属: ${selectedText}`);
+            } catch (error) {
+                updateSpecialHitokotoStatus('获取失败', false);
+                reject(new Error(`专属一言获取失败: ${error.message}`));
+            }
+        });
     }
 
     // 获取TXTAPI内容
@@ -967,6 +1160,47 @@
         return targetTime;
     }
 
+    // 解析随机时间字符串
+    function parseRandomTimeString() {
+        if (!userConfig.sendTimeRandom) {
+            return parseTimeString(userConfig.sendTime);
+        }
+        
+        const now = new Date();
+        
+        // 解析时间范围
+        const [startHour, startMinute, startSecond] = userConfig.sendTimeRangeStart.split(':').map(Number);
+        const [endHour, endMinute, endSecond] = userConfig.sendTimeRangeEnd.split(':').map(Number);
+        
+        // 转换为分钟数
+        const startMinutes = startHour * 60 + startMinute;
+        const endMinutes = endHour * 60 + endMinute;
+        
+        let randomMinutes;
+        
+        // 处理跨天情况
+        if (endMinutes > startMinutes) {
+            randomMinutes = startMinutes + Math.floor(Math.random() * (endMinutes - startMinutes));
+        } else {
+            // 跨天情况
+            randomMinutes = startMinutes + Math.floor(Math.random() * (1440 - startMinutes + endMinutes));
+        }
+        
+        // 转换回小时和分钟
+        const randomHour = Math.floor(randomMinutes / 60) % 24;
+        const randomMinute = randomMinutes % 60;
+        
+        const targetTime = new Date(now);
+        targetTime.setHours(randomHour, randomMinute, startSecond || 0, 0);
+        
+        // 如果随机时间已经过去，就安排到明天
+        if (targetTime <= now) {
+            targetTime.setDate(targetTime.getDate() + 1);
+        }
+        
+        return targetTime;
+    }
+
     // 更新状态
     function updateStatus(status) {
         const statusEl = document.getElementById('dy-fire-status');
@@ -987,14 +1221,14 @@
         const now = new Date();
        
         if (status === true) {
-            nextSendTime = parseTimeString(userConfig.sendTime);
+            nextSendTime = parseRandomTimeString();
             const tomorrow = new Date(now);
             tomorrow.setDate(tomorrow.getDate() + 1);
             if (nextSendTime.getDate() !== tomorrow.getDate()) {
                 nextSendTime.setDate(tomorrow.getDate());
             }
         } else if (status === false) {
-            nextSendTime = parseTimeString(userConfig.sendTime);
+            nextSendTime = parseRandomTimeString();
             if (nextSendTime <= now) {
                 nextSendTime.setDate(nextSendTime.getDate() + 1);
             }
@@ -1048,26 +1282,78 @@
             
             const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
             if (unsentUsers.length > 0 && !isProcessing) {
-                const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
-                const targetTimeToday = new Date();
-                targetTimeToday.setHours(targetHour, targetMinute, targetSecond || 0, 0);
-               
-                if (now >= targetTimeToday) {
-                    addHistoryLog(`检测到有${unsentUsers.length}个用户未发送且已过${userConfig.sendTime}，自动发送`, 'info');
-                    sendMessage();
+                // 获取今天的目标时间
+                let targetTimeToday;
+                if (userConfig.sendTimeRandom) {
+                    // 对于随机时间，我们检查是否在时间范围内
+                    const [startHour, startMinute] = userConfig.sendTimeRangeStart.split(':').map(Number);
+                    const [endHour, endMinute] = userConfig.sendTimeRangeEnd.split(':').map(Number);
+                    
+                    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+                    const startMinutes = startHour * 60 + startMinute;
+                    const endMinutes = endHour * 60 + endMinute;
+                    
+                    // 检查是否在时间范围内
+                    let isInRange = false;
+                    if (endMinutes > startMinutes) {
+                        // 不跨天
+                        isInRange = nowMinutes >= startMinutes && nowMinutes <= endMinutes;
+                    } else {
+                        // 跨天
+                        isInRange = nowMinutes >= startMinutes || nowMinutes <= endMinutes;
+                    }
+                    
+                    if (isInRange) {
+                        addHistoryLog(`检测到有${unsentUsers.length}个用户未发送且在随机时间范围内(${userConfig.sendTimeRangeStart}-${userConfig.sendTimeRangeEnd})，自动发送`, 'info');
+                        sendMessage();
+                    }
+                } else {
+                    const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
+                    const targetTimeToday = new Date();
+                    targetTimeToday.setHours(targetHour, targetMinute, targetSecond || 0, 0);
+                   
+                    if (now >= targetTimeToday) {
+                        addHistoryLog(`检测到有${unsentUsers.length}个用户未发送且已过${userConfig.sendTime}，自动发送`, 'info');
+                        sendMessage();
+                    }
                 }
             }
         } else {
             const lastSentDate = GM_getValue('lastSentDate', '');
-            const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
-           
+            
             if (lastSentDate !== today) {
-                const targetTimeToday = new Date();
-                targetTimeToday.setHours(targetHour, targetMinute, targetSecond || 0, 0);
-               
-                if (now >= targetTimeToday && !isProcessing) {
-                    addHistoryLog(`检测到今日未发送且已过${userConfig.sendTime}，自动发送`, 'info');
-                    sendMessage();
+                if (userConfig.sendTimeRandom) {
+                    // 对于随机时间，我们检查是否在时间范围内
+                    const [startHour, startMinute] = userConfig.sendTimeRangeStart.split(':').map(Number);
+                    const [endHour, endMinute] = userConfig.sendTimeRangeEnd.split(':').map(Number);
+                    
+                    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+                    const startMinutes = startHour * 60 + startMinute;
+                    const endMinutes = endHour * 60 + endMinute;
+                    
+                    // 检查是否在时间范围内
+                    let isInRange = false;
+                    if (endMinutes > startMinutes) {
+                        // 不跨天
+                        isInRange = nowMinutes >= startMinutes && nowMinutes <= endMinutes;
+                    } else {
+                        // 跨天
+                        isInRange = nowMinutes >= startMinutes || nowMinutes <= endMinutes;
+                    }
+                    
+                    if (isInRange && !isProcessing) {
+                        addHistoryLog(`检测到今日未发送且在随机时间范围内(${userConfig.sendTimeRangeStart}-${userConfig.sendTimeRangeEnd})，自动发送`, 'info');
+                        sendMessage();
+                    }
+                } else {
+                    const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
+                    const targetTimeToday = new Date();
+                    targetTimeToday.setHours(targetHour, targetMinute, targetSecond || 0, 0);
+                   
+                    if (now >= targetTimeToday && !isProcessing) {
+                        addHistoryLog(`检测到今日未发送且已过${userConfig.sendTime}，自动发送`, 'info');
+                        sendMessage();
+                    }
                 }
             }
         }
@@ -1108,7 +1394,7 @@
                     } else {
                         // 所有用户已完成，记录重置日期
                         GM_setValue('lastResetDate', new Date().toDateString());
-                        nextSendTime = parseTimeString(userConfig.sendTime);
+                        nextSendTime = parseRandomTimeString();
                         const tomorrow = new Date(now);
                         tomorrow.setDate(tomorrow.getDate() + 1);
                         if (nextSendTime.getDate() !== tomorrow.getDate()) {
@@ -1122,7 +1408,7 @@
                     const today = new Date().toDateString();
                    
                     if (lastSentDate === today) {
-                        nextSendTime = parseTimeString(userConfig.sendTime);
+                        nextSendTime = parseRandomTimeString();
                         const tomorrow = new Date(now);
                         tomorrow.setDate(tomorrow.getDate() + 1);
                         if (nextSendTime.getDate() !== tomorrow.getDate()) {
@@ -1162,6 +1448,7 @@
         GM_setValue('lastSentDate', '');
         GM_setValue('txtApiManualSentIndexes', []);
         GM_setValue('lastTargetUser', '');
+        GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
         resetTodaySentUsers();
         currentRetryUser = null;
         addHistoryLog('发送记录已清空', 'info');
@@ -1170,6 +1457,7 @@
         updateRetryCount();
         updateHitokotoStatus('未获取');
         updateTxtApiStatus('未获取');
+        updateSpecialHitokotoStatus('未获取');
         updateUserStatusDisplay();
         stopChatObserver();
         if (chatInputCheckTimer) {
@@ -1194,6 +1482,9 @@
                 GM_setValue('currentUserIndex', -1);
                 GM_setValue('lastTargetUser', '');
                 GM_setValue('lastResetDate', '');
+                GM_setValue('fireDays', 1);
+                GM_setValue('lastFireDate', new Date().toISOString().split('T')[0]);
+                GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
             }
         } else {
             GM_setValue('lastSentDate', '');
@@ -1204,6 +1495,9 @@
             GM_setValue('currentUserIndex', -1);
             GM_setValue('lastTargetUser', '');
             GM_setValue('lastResetDate', '');
+            GM_setValue('fireDays', 1);
+            GM_setValue('lastFireDate', new Date().toISOString().split('T')[0]);
+            GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
         }
        
         initConfig();
@@ -1214,6 +1508,8 @@
         updateRetryCount();
         updateHitokotoStatus('未获取');
         updateTxtApiStatus('未获取');
+        updateSpecialHitokotoStatus('未获取');
+        updateFireDaysStatus();
         updateUserStatusDisplay();
         stopChatObserver();
         if (chatInputCheckTimer) {
@@ -1310,6 +1606,216 @@
         }
     }
 
+    // 解析当前聊天列表的用户
+    function parseCurrentChatUsers() {
+        const userElements = document.querySelectorAll('.item-header-name-vL_79m');
+        const users = [];
+        
+        userElements.forEach(element => {
+            const username = element.textContent.trim();
+            if (username && !users.includes(username)) {
+                users.push(username);
+            }
+        });
+        
+        return users;
+    }
+
+    // 显示用户选择面板
+    function showUserSelectPanel() {
+        const existingPanel = document.getElementById('dy-fire-user-select-panel');
+        if (existingPanel) {
+            existingPanel.remove();
+            return;
+        }
+
+        const currentUsers = parseCurrentChatUsers();
+        
+        if (currentUsers.length === 0) {
+            addHistoryLog('未找到聊天列表中的用户', 'warn');
+            return;
+        }
+
+        // 获取现有目标用户
+        let currentTargetUsers = [];
+        if (userConfig.targetUsernames && userConfig.targetUsernames.trim()) {
+            currentTargetUsers = userConfig.targetUsernames.split('\n')
+                .map(user => user.trim())
+                .filter(user => user.length > 0);
+        }
+
+        const userSelectPanel = document.createElement('div');
+        userSelectPanel.id = 'dy-fire-user-select-panel';
+        userSelectPanel.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            max-width: 90vw;
+            width: 500px;
+            max-height: 80vh;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            z-index: 10000;
+            padding: 0;
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            overflow: hidden;
+            box-sizing: border-box;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+        `;
+
+        const userCheckboxes = currentUsers.map(user => {
+            const isChecked = currentTargetUsers.includes(user);
+            return `
+            <div style="padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <label style="display: flex; align-items: center; cursor: pointer;">
+                    <input type="checkbox" class="user-checkbox" value="${user}" ${isChecked ? 'checked' : ''} style="margin-right: 10px;">
+                    <span style="color: #fff; font-size: 14px;">${user}</span>
+                </label>
+            </div>
+        `}).join('');
+
+        userSelectPanel.innerHTML = `
+            <div id="dy-fire-user-select-header" style="padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); cursor: move;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin: 0; color: #fff; font-size: 18px; font-weight: 600;">
+                        👥 选择用户 (${currentUsers.length})
+                    </h3>
+                    <button id="dy-fire-user-select-close" style="background: rgba(255,255,255,0.1); border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; color: #fff; font-size: 18px; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;">×</button>
+                </div>
+            </div>
+            
+            <div style="padding: 15px 20px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+                    <button id="dy-fire-select-all" style="padding: 8px 16px; background: rgba(0, 216, 184, 0.2); color: #00d8b8; border: 1px solid rgba(0, 216, 184, 0.3); border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s ease;">
+                        全选
+                    </button>
+                    <button id="dy-fire-deselect-all" style="padding: 8px 16px; background: rgba(255, 44, 84, 0.2); color: #ff2c54; border: 1px solid rgba(255, 44, 84, 0.3); border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s ease;">
+                        取消全选
+                    </button>
+                </div>
+                
+                <div style="height: 300px; overflow-y: auto; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 10px;">
+                    ${userCheckboxes}
+                </div>
+            </div>
+            
+            <div style="padding: 20px; border-top: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2);">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                    <button id="dy-fire-user-select-add" style="padding: 12px; background: linear-gradient(135deg, #00d8b8 0%, #00b8a8 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s ease;">
+                        ✅ 更新目标用户
+                    </button>
+                    <button id="dy-fire-user-select-cancel" style="padding: 12px; background: linear-gradient(135deg, #ff2c54 0%, #ff6b8b 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s ease;">
+                        ❌ 取消
+                    </button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(userSelectPanel);
+
+        addDragFunctionality(userSelectPanel, 'dy-fire-user-select-header');
+
+        const selectAllBtn = document.getElementById('dy-fire-select-all');
+        const deselectAllBtn = document.getElementById('dy-fire-deselect-all');
+        const addBtn = document.getElementById('dy-fire-user-select-add');
+        const cancelBtn = document.getElementById('dy-fire-user-select-cancel');
+        const closeBtn = document.getElementById('dy-fire-user-select-close');
+
+        // 全选
+        selectAllBtn.addEventListener('click', function() {
+            const checkboxes = userSelectPanel.querySelectorAll('.user-checkbox');
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = true;
+            });
+        });
+
+        // 取消全选
+        deselectAllBtn.addEventListener('click', function() {
+            const checkboxes = userSelectPanel.querySelectorAll('.user-checkbox');
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = false;
+            });
+        });
+
+        // 更新目标用户
+        addBtn.addEventListener('click', function() {
+            const checkboxes = userSelectPanel.querySelectorAll('.user-checkbox');
+            const selectedUsers = [];
+            
+            checkboxes.forEach(checkbox => {
+                if (checkbox.checked) {
+                    selectedUsers.push(checkbox.value);
+                }
+            });
+            
+            // 更新配置
+            userConfig.targetUsernames = selectedUsers.join('\n');
+            saveConfig();
+            parseTargetUsers(); // 这会自动设置enableTargetUser
+            updateUserStatusDisplay();
+            
+            if (selectedUsers.length > 0) {
+                addHistoryLog(`已更新 ${selectedUsers.length} 个目标用户`, 'success');
+            } else {
+                addHistoryLog('已清空目标用户列表', 'info');
+            }
+            
+            userSelectPanel.remove();
+        });
+
+        // 取消
+        cancelBtn.addEventListener('click', function() {
+            userSelectPanel.remove();
+        });
+
+        // 关闭
+        closeBtn.addEventListener('click', function() {
+            userSelectPanel.remove();
+        });
+
+        // 悬停效果
+        [selectAllBtn, deselectAllBtn, addBtn, cancelBtn].forEach(btn => {
+            btn.addEventListener('mouseenter', function() {
+                this.style.transform = 'translateY(-2px)';
+            });
+            btn.addEventListener('mouseleave', function() {
+                this.style.transform = 'translateY(0)';
+            });
+        });
+
+        closeBtn.addEventListener('mouseenter', function() {
+            this.style.background = 'rgba(255,255,255,0.2)';
+            this.style.transform = 'scale(1.1)';
+        });
+        closeBtn.addEventListener('mouseleave', function() {
+            this.style.background = 'rgba(255,255,255,0.1)';
+            this.style.transform = 'scale(1)';
+        });
+    }
+
+    // 修改火花天数
+    function modifyFireDays() {
+        const newDays = prompt('请输入新的火花天数:', userConfig.fireDays);
+        if (newDays !== null) {
+            const days = parseInt(newDays, 10);
+            if (!isNaN(days) && days >= 0) {
+                userConfig.fireDays = days;
+                // 修改天数时更新最后火花日期为今天，避免今天重复增加
+                const today = new Date().toISOString().split('T')[0];
+                userConfig.lastFireDate = today;
+                GM_setValue('fireDays', days);
+                GM_setValue('lastFireDate', today);
+                updateFireDaysStatus();
+                addHistoryLog(`火花天数已修改为: ${days}`, 'success');
+            } else {
+                addHistoryLog('请输入有效的数字', 'error');
+            }
+        }
+    }
+
     // 创建UI控制面板
     function createControlPanel() {
         const existingPanel = document.getElementById('dy-fire-helper');
@@ -1323,7 +1829,7 @@
             position: fixed;
             top: 20px;
             right: 20px;
-            width: 450px;
+            width: 500px;
             background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
             border-radius: 16px;
             box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.1);
@@ -1355,7 +1861,7 @@
                     </div>
                     <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
                         <div style="color: #999; margin-bottom: 4px;">用户状态</div>
-                        <div id="dy-fire-user-status" style="color: #999; font-weight: 600; font-size: 13px;">未启用</div>
+                        <div id="dy-fire-user-status" style="color: #999; font-weight: 600; font-size: 13px;">${userConfig.enableTargetUser ? '已启用' : '未启用'}</div>
                     </div>
                     <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
                         <div style="color: #999; margin-bottom: 4px;">发送进度</div>
@@ -1369,7 +1875,7 @@
             </div>
            
             <div style="padding: 15px 20px; border-bottom: 1px solid rgba(255,255,255,0.1);">
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 12px;">
                     <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
                         <div style="color: #999; font-size: 11px; margin-bottom: 2px;">下次发送</div>
                         <div id="dy-fire-next" style="color: #fff; font-size: 12px; font-weight: 500;">2023-11-05 00:01:00</div>
@@ -1378,12 +1884,20 @@
                         <div style="color: #999; font-size: 11px; margin-bottom: 2px;">倒计时</div>
                         <div id="dy-fire-countdown" style="color: #ff2c54; font-size: 12px; font-weight: 700;">23:45:12</div>
                     </div>
+                    <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
+                        <div style="color: #999; font-size: 11px; margin-bottom: 2px;">火花天数</div>
+                        <div id="dy-fire-days" style="color: #00d8b8; font-size: 12px; font-weight: 700;">${userConfig.fireDays}</div>
+                    </div>
                 </div>
                
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;">
                     <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
                         <div style="color: #999; font-size: 11px; margin-bottom: 2px;">一言状态</div>
                         <div id="dy-fire-hitokoto" style="color: #00d8b8; font-size: 12px; font-weight: 500;">未获取</div>
+                    </div>
+                    <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
+                        <div style="color: #999; font-size: 11px; margin-bottom: 2px;">专属一言状态</div>
+                        <div id="dy-fire-special-hitokoto" style="color: #00d8b8; font-size: 12px; font-weight: 500;">未获取</div>
                     </div>
                     <div style="background: rgba(255,255,255,0.05); padding: 8px; border-radius: 8px;">
                         <div style="color: #999; font-size: 11px; margin-bottom: 2px;">TXTAPI状态</div>
@@ -1408,6 +1922,12 @@
                     </button>
                     <button id="dy-fire-history" style="padding: 10px; background: rgba(255,255,255,0.1); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s ease;">
                         📋 历史日志
+                    </button>
+                    <button id="dy-fire-modify-days" style="padding: 10px; background: rgba(255,255,255,0.1); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s ease;">
+                        📅 修改天数
+                    </button>
+                    <button id="dy-fire-select-users" style="padding: 10px; background: rgba(255,255,255,0.1); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s ease;">
+                        👥 选择用户
                     </button>
                     <button id="dy-fire-clear" style="padding: 10px; background: rgba(255,255,255,0.1); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s ease;">
                         🗑️ 清空记录
@@ -1446,11 +1966,14 @@
         document.getElementById('dy-fire-send').addEventListener('click', sendMessage);
         document.getElementById('dy-fire-settings').addEventListener('click', showSettingsPanel);
         document.getElementById('dy-fire-history').addEventListener('click', showHistoryPanel);
+        document.getElementById('dy-fire-modify-days').addEventListener('click', modifyFireDays);
+        document.getElementById('dy-fire-select-users').addEventListener('click', showUserSelectPanel);
         document.getElementById('dy-fire-clear').addEventListener('click', clearData);
         document.getElementById('dy-fire-reset').addEventListener('click', resetAllConfig);
         document.getElementById('dy-fire-reset-users').addEventListener('click', resetTodaySentUsers);
         
         updateUserStatusDisplay();
+        updateFireDaysStatus();
     }
 
     // 添加按钮悬停效果
@@ -1729,7 +2252,7 @@
             left: 50%;
             transform: translate(-50%, -50%);
             max-width: 90vw;
-            width: 900px;
+            width: 1000px;
             max-height: 85vh;
             background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
             border-radius: 20px;
@@ -1756,6 +2279,7 @@
                     <div class="settings-nav-item active" data-tab="basic">📅 基本设置</div>
                     <div class="settings-nav-item" data-tab="message">💬 消息设置</div>
                     <div class="settings-nav-item" data-tab="api">🔗 API设置</div>
+                    <div class="settings-nav-item" data-tab="special">🌟 专属一言</div>
                     <div class="settings-nav-item" data-tab="users">👥 用户设置</div>
                     <div class="settings-nav-item" data-tab="advanced">⚡ 高级设置</div>
                 </div>
@@ -1765,9 +2289,30 @@
                         <div class="settings-section">
                             <h4 style="color: #fff; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">🕒 发送时间设置</h4>
                             <div style="margin-bottom: 15px;">
+                                <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 10px;">
+                                    <input type="checkbox" id="dy-fire-settings-time-random" ${userConfig.sendTimeRandom ? 'checked' : ''} style="margin-right: 10px;">
+                                    <span style="color: #ccc;">启用随机发送时间</span>
+                                </label>
+                            </div>
+                            
+                            <div id="fixed-time-container" style="margin-bottom: 15px; ${userConfig.sendTimeRandom ? 'display: none;' : ''}">
                                 <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">发送时间 (HH:mm:ss)</label>
                                 <input type="text" id="dy-fire-settings-time" value="${userConfig.sendTime}" style="width: 100%; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; box-sizing: border-box; color: #fff; font-size: 14px;" placeholder="例如: 00:01:00">
                                 <div style="font-size: 12px; color: #999; margin-top: 5px;">设置每日自动发送消息的时间</div>
+                            </div>
+                            
+                            <div id="random-time-container" style="margin-bottom: 15px; ${userConfig.sendTimeRandom ? '' : 'display: none;'}">
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                    <div>
+                                        <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">开始时间 (HH:mm:ss)</label>
+                                        <input type="text" id="dy-fire-settings-time-start" value="${userConfig.sendTimeRangeStart}" style="width: 100%; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; box-sizing: border-box; color: #fff; font-size: 14px;" placeholder="例如: 23:30:00">
+                                    </div>
+                                    <div>
+                                        <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">结束时间 (HH:mm:ss)</label>
+                                        <input type="text" id="dy-fire-settings-time-end" value="${userConfig.sendTimeRangeEnd}" style="width: 100%; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; box-sizing: border-box; color: #fff; font-size: 14px;" placeholder="例如: 00:30:00">
+                                    </div>
+                                </div>
+                                <div style="font-size: 12px; color: #999; margin-top: 5px;">在开始时间和结束时间之间随机选择一个时间发送（支持跨天）</div>
                             </div>
                         </div>
 
@@ -1785,11 +2330,14 @@
                             <h4 style="color: #fff; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">📝 消息内容</h4>
                             <div style="margin-bottom: 15px;">
                                 <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">自定义消息模板</label>
-                                <textarea id="dy-fire-settings-custom-message" style="width: 100%; height: 120px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;">${userConfig.customMessage}</textarea>
+                                <textarea id="dy-fire-settings-custom-message" style="width: 100%; height: 150px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;">${userConfig.customMessage}</textarea>
                                 <div style="font-size: 12px; color: #999; margin-top: 5px;">
-                                    使用 [API] 作为一言内容的占位符<br>
-                                    使用 [TXTAPI] 作为TXTAPI内容的占位符<br>
-                                    支持换行符，关闭API时占位符标记将保留
+                                    可用占位符:<br>
+                                    [API] - 一言内容<br>
+                                    [TXTAPI] - TXTAPI内容<br>
+                                    [专属一言] - 专属一言内容<br>
+                                    [天数] - 火花持续天数<br>
+                                    支持换行符，关闭相应功能时占位符标记将保留
                                 </div>
                             </div>
                         </div>
@@ -1855,21 +2403,78 @@
                             </div>
                         </div>
                     </div>
+                    
+                    <div id="special-settings" class="settings-tab" style="display: none;">
+                        <div class="settings-section">
+                            <h4 style="color: #fff; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">🌟 专属一言设置</h4>
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 15px;">
+                                    <input type="checkbox" id="dy-fire-settings-use-special-hitokoto" ${userConfig.useSpecialHitokoto ? 'checked' : ''} style="margin-right: 10px;">
+                                    <span style="color: #ccc;">启用专属一言</span>
+                                </label>
+                            </div>
+                            
+                            <div style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">发送模式</label>
+                                <div style="display: flex; gap: 20px;">
+                                    <label style="display: flex; align-items: center; cursor: pointer;">
+                                        <input type="radio" name="special-hitokoto-mode" value="random" ${userConfig.specialHitokotoRandom ? 'checked' : ''} style="margin-right: 8px;">
+                                        <span style="color: #ccc;">随机发送</span>
+                                    </label>
+                                    <label style="display: flex; align-items: center; cursor: pointer;">
+                                        <input type="radio" name="special-hitokoto-mode" value="sequential" ${!userConfig.specialHitokotoRandom ? 'checked' : ''} style="margin-right: 8px;">
+                                        <span style="color: #ccc;">顺序发送</span>
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">周一文案（一行一个）</label>
+                                    <textarea id="dy-fire-settings-special-monday" style="width: 100%; height: 80px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;">${userConfig.specialHitokotoMonday}</textarea>
+                                </div>
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">周二文案（一行一个）</label>
+                                    <textarea id="dy-fire-settings-special-tuesday" style="width: 100%; height: 80px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;">${userConfig.specialHitokotoTuesday}</textarea>
+                                </div>
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">周三文案（一行一个）</label>
+                                    <textarea id="dy-fire-settings-special-wednesday" style="width: 100%; height: 80px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;">${userConfig.specialHitokotoWednesday}</textarea>
+                                </div>
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">周四文案（一行一个）</label>
+                                    <textarea id="dy-fire-settings-special-thursday" style="width: 100%; height: 80px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;">${userConfig.specialHitokotoThursday}</textarea>
+                                </div>
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">周五文案（一行一个）</label>
+                                    <textarea id="dy-fire-settings-special-friday" style="width: 100%; height: 80px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;">${userConfig.specialHitokotoFriday}</textarea>
+                                </div>
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">周六文案（一行一个）</label>
+                                    <textarea id="dy-fire-settings-special-saturday" style="width: 100%; height: 80px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;">${userConfig.specialHitokotoSaturday}</textarea>
+                                </div>
+                                <div>
+                                    <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">周日文案（一行一个）</label>
+                                    <textarea id="dy-fire-settings-special-sunday" style="width: 100%; height: 80px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;">${userConfig.specialHitokotoSunday}</textarea>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
 
                     <div id="users-settings" class="settings-tab" style="display: none;">
                         <div class="settings-section">
                             <h4 style="color: #fff; margin: 0 0 15px 0; font-size: 16px; font-weight: 600;">👥 用户设置</h4>
                             <div style="margin-bottom: 15px;">
                                 <label style="display: flex; align-items: center; cursor: pointer; margin-bottom: 15px;">
-                                    <input type="checkbox" id="dy-fire-settings-enable-target" ${userConfig.enableTargetUser ? 'checked' : ''} style="margin-right: 10px;">
-                                    <span style="color: #ccc;">启用目标用户查找</span>
+                                    <input type="checkbox" id="dy-fire-settings-enable-target" ${userConfig.enableTargetUser ? 'checked' : ''} style="margin-right: 10px;" disabled>
+                                    <span style="color: #ccc;">启用目标用户查找（自动根据目标用户列表状态设置）</span>
                                 </label>
                             </div>
 
-                            <div id="target-user-container" style="margin-bottom: 15px; ${userConfig.enableTargetUser ? '' : 'display: none;'}">
-                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">目标用户名（支持单个或多个用户，用逗号、竖线或换行分隔）</label>
-                                <textarea id="dy-fire-settings-target-user" style="width: 100%; height: 100px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;" placeholder="例如: 用户1&#10;或: 用户1, 用户2 | 用户3">${userConfig.targetUsernames}</textarea>
-                                <div style="font-size: 12px; color: #999; margin-top: 5px;">启用后会自动在聊天列表中查找指定用户并点击，支持单个或多个用户</div>
+                            <div id="target-user-container" style="margin-bottom: 15px;">
+                                <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">目标用户名（一行一个）</label>
+                                <textarea id="dy-fire-settings-target-user" style="width: 100%; height: 100px; padding: 12px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; resize: vertical; box-sizing: border-box; color: #fff; font-size: 14px;" placeholder="每行一个用户名">${userConfig.targetUsernames}</textarea>
+                                <div style="font-size: 12px; color: #999; margin-top: 5px;">每行一个用户名，列表不为空时自动启用目标用户查找</div>
                                 
                                 <div style="margin-top: 15px;">
                                     <label style="display: block; margin-bottom: 8px; color: #ccc; font-weight: 500;">用户发送模式</label>
@@ -2039,8 +2644,11 @@
         styleEl.textContent = navStyle;
         settingsPanel.appendChild(styleEl);
 
-        document.getElementById('dy-fire-settings-enable-target').addEventListener('change', function() {
-            document.getElementById('target-user-container').style.display = this.checked ? 'block' : 'none';
+        // 随机时间切换
+        document.getElementById('dy-fire-settings-time-random').addEventListener('change', function() {
+            const isRandom = this.checked;
+            document.getElementById('fixed-time-container').style.display = isRandom ? 'none' : 'block';
+            document.getElementById('random-time-container').style.display = isRandom ? 'block' : 'none';
         });
 
         const modeRadios = document.querySelectorAll('input[name="txt-api-mode"]');
@@ -2092,8 +2700,10 @@
 
     // 保存设置
     function saveSettings() {
+        const timeRandom = document.getElementById('dy-fire-settings-time-random').checked;
         const timeValue = document.getElementById('dy-fire-settings-time').value;
-        const enableTargetUser = document.getElementById('dy-fire-settings-enable-target').checked;
+        const timeStart = document.getElementById('dy-fire-settings-time-start').value;
+        const timeEnd = document.getElementById('dy-fire-settings-time-end').value;
         const targetUsernames = document.getElementById('dy-fire-settings-target-user').value;
         const multiUserMode = document.querySelector('input[name="multi-user-mode"]:checked').value;
         const multiUserRetrySame = document.getElementById('dy-fire-settings-multi-retry-same').checked;
@@ -2101,6 +2711,8 @@
         const pageLoadWaitTime = parseInt(document.getElementById('dy-fire-settings-page-wait').value, 10);
         const useHitokoto = document.getElementById('dy-fire-settings-use-hitokoto').checked;
         const useTxtApi = document.getElementById('dy-fire-settings-use-txtapi').checked;
+        const useSpecialHitokoto = document.getElementById('dy-fire-settings-use-special-hitokoto').checked;
+        const specialHitokotoRandom = document.querySelector('input[name="special-hitokoto-mode"]:checked').value === 'random';
         const txtApiMode = document.querySelector('input[name="txt-api-mode"]:checked').value;
         const txtApiRandom = document.getElementById('dy-fire-settings-txtapi-random').checked;
         const txtApiUrl = document.getElementById('dy-fire-settings-txtapi-url').value;
@@ -2114,10 +2726,29 @@
         const fromFormat = document.getElementById('dy-fire-settings-from-format').value;
         const fromWhoFormat = document.getElementById('dy-fire-settings-from-who-format').value;
         const customMessage = document.getElementById('dy-fire-settings-custom-message').value;
+        
+        // 专属一言文案
+        const specialMonday = document.getElementById('dy-fire-settings-special-monday').value;
+        const specialTuesday = document.getElementById('dy-fire-settings-special-tuesday').value;
+        const specialWednesday = document.getElementById('dy-fire-settings-special-wednesday').value;
+        const specialThursday = document.getElementById('dy-fire-settings-special-thursday').value;
+        const specialFriday = document.getElementById('dy-fire-settings-special-friday').value;
+        const specialSaturday = document.getElementById('dy-fire-settings-special-saturday').value;
+        const specialSunday = document.getElementById('dy-fire-settings-special-sunday').value;
        
-        if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/.test(timeValue)) {
+        // 时间格式验证
+        const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/;
+        
+        if (!timeRandom && !timeRegex.test(timeValue)) {
             addHistoryLog('时间格式错误，请使用HH:mm:ss格式', 'error');
             return;
+        }
+        
+        if (timeRandom) {
+            if (!timeRegex.test(timeStart) || !timeRegex.test(timeEnd)) {
+                addHistoryLog('时间格式错误，请使用HH:mm:ss格式', 'error');
+                return;
+            }
         }
        
         if (isNaN(maxRetryCount) || maxRetryCount < 1 || maxRetryCount > 10) {
@@ -2159,14 +2790,11 @@
             addHistoryLog('请填写手动文本内容', 'error');
             return;
         }
-
-        if (enableTargetUser && !targetUsernames.trim()) {
-            addHistoryLog('启用目标用户查找时，必须填写目标用户名', 'error');
-            return;
-        }
        
+        userConfig.sendTimeRandom = timeRandom;
         userConfig.sendTime = timeValue;
-        userConfig.enableTargetUser = enableTargetUser;
+        userConfig.sendTimeRangeStart = timeStart;
+        userConfig.sendTimeRangeEnd = timeEnd;
         userConfig.targetUsernames = targetUsernames;
         userConfig.multiUserMode = multiUserMode;
         userConfig.multiUserRetrySame = multiUserRetrySame;
@@ -2174,6 +2802,8 @@
         userConfig.pageLoadWaitTime = pageLoadWaitTime;
         userConfig.useHitokoto = useHitokoto;
         userConfig.useTxtApi = useTxtApi;
+        userConfig.useSpecialHitokoto = useSpecialHitokoto;
+        userConfig.specialHitokotoRandom = specialHitokotoRandom;
         userConfig.txtApiMode = txtApiMode;
         userConfig.txtApiManualRandom = txtApiRandom;
         userConfig.txtApiUrl = txtApiUrl;
@@ -2187,11 +2817,28 @@
         userConfig.fromFormat = fromFormat;
         userConfig.fromWhoFormat = fromWhoFormat;
         userConfig.customMessage = customMessage;
+        
+        // 专属一言文案
+        userConfig.specialHitokotoMonday = specialMonday;
+        userConfig.specialHitokotoTuesday = specialTuesday;
+        userConfig.specialHitokotoWednesday = specialWednesday;
+        userConfig.specialHitokotoThursday = specialThursday;
+        userConfig.specialHitokotoFriday = specialFriday;
+        userConfig.specialHitokotoSaturday = specialSaturday;
+        userConfig.specialHitokotoSunday = specialSunday;
+       
+        // 自动设置enableTargetUser
+        const targetUsers = targetUsernames.trim().split('\n').filter(user => user.trim().length > 0);
+        userConfig.enableTargetUser = targetUsers.length > 0;
        
         saveConfig();
         parseTargetUsers();
         updateUserStatusDisplay();
        
+        // 重置倒计时
+        nextSendTime = parseRandomTimeString();
+        startCountdown(nextSendTime);
+        
         document.getElementById('dy-fire-settings-panel').remove();
         addHistoryLog('设置已保存', 'success');
     }
@@ -2214,6 +2861,7 @@
        
         updateStatus(isSentToday);
         updateUserStatusDisplay();
+        updateFireDaysStatus();
 
         const reopenBtn = document.getElementById('dy-fire-reopen-btn');
         if (reopenBtn) {
@@ -2235,6 +2883,8 @@
                 GM_registerMenuCommand('立即发送续火消息', sendMessage);
                 GM_registerMenuCommand('设置', showSettingsPanel);
                 GM_registerMenuCommand('历史日志', showHistoryPanel);
+                GM_registerMenuCommand('修改火花天数', modifyFireDays);
+                GM_registerMenuCommand('从列表选择用户', showUserSelectPanel);
                 GM_registerMenuCommand('清空发送记录', clearData);
                 GM_registerMenuCommand('重置所有配置', resetAllConfig);
                 GM_registerMenuCommand('重置今日发送记录', resetTodaySentUsers);
@@ -2247,29 +2897,104 @@
        
         setInterval(() => {
             const now = new Date();
-            const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
-           
-            if (now.getHours() === targetHour &&
-                now.getMinutes() === targetMinute &&
-                now.getSeconds() === (targetSecond || 0)) {
-               
-                if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
-                    const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
-                    if (unsentUsers.length > 0) {
-                        addHistoryLog('定时任务触发发送', 'info');
-                        sendMessage();
+            const today = new Date().toDateString();
+            const lastSentDate = GM_getValue('lastSentDate', '');
+            
+            if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
+                const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
+                if (unsentUsers.length > 0) {
+                    if (userConfig.sendTimeRandom) {
+                        // 随机时间模式，检查是否在时间范围内
+                        const [startHour, startMinute] = userConfig.sendTimeRangeStart.split(':').map(Number);
+                        const [endHour, endMinute] = userConfig.sendTimeRangeEnd.split(':').map(Number);
+                        
+                        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+                        const startMinutes = startHour * 60 + startMinute;
+                        const endMinutes = endHour * 60 + endMinute;
+                        
+                        let isInRange = false;
+                        if (endMinutes > startMinutes) {
+                            // 不跨天
+                            isInRange = nowMinutes >= startMinutes && nowMinutes <= endMinutes;
+                        } else {
+                            // 跨天
+                            isInRange = nowMinutes >= startMinutes || nowMinutes <= endMinutes;
+                        }
+                        
+                        if (isInRange && !isProcessing) {
+                            const shouldSend = checkIfShouldSendNow();
+                            if (shouldSend) {
+                                addHistoryLog('定时任务触发发送（随机时间模式）', 'info');
+                                sendMessage();
+                            }
+                        }
+                    } else {
+                        // 固定时间模式
+                        const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
+                        if (now.getHours() === targetHour &&
+                            now.getMinutes() === targetMinute &&
+                            now.getSeconds() === (targetSecond || 0)) {
+                           
+                            const shouldSend = checkIfShouldSendNow();
+                            if (shouldSend) {
+                                addHistoryLog('定时任务触发发送（固定时间模式）', 'info');
+                                sendMessage();
+                            }
+                        }
                     }
-                } else {
-                    const today = new Date().toDateString();
-                    const lastSentDate = GM_getValue('lastSentDate', '');
-                   
-                    if (lastSentDate !== today) {
-                        addHistoryLog('定时任务触发发送', 'info');
-                        sendMessage();
+                }
+            } else {
+                if (lastSentDate !== today) {
+                    if (userConfig.sendTimeRandom) {
+                        // 随机时间模式
+                        const [startHour, startMinute] = userConfig.sendTimeRangeStart.split(':').map(Number);
+                        const [endHour, endMinute] = userConfig.sendTimeRangeEnd.split(':').map(Number);
+                        
+                        const nowMinutes = now.getHours() * 60 + now.getMinutes();
+                        const startMinutes = startHour * 60 + startMinute;
+                        const endMinutes = endHour * 60 + endMinute;
+                        
+                        let isInRange = false;
+                        if (endMinutes > startMinutes) {
+                            // 不跨天
+                            isInRange = nowMinutes >= startMinutes && nowMinutes <= endMinutes;
+                        } else {
+                            // 跨天
+                            isInRange = nowMinutes >= startMinutes || nowMinutes <= endMinutes;
+                        }
+                        
+                        if (isInRange && !isProcessing) {
+                            addHistoryLog('定时任务触发发送（随机时间模式）', 'info');
+                            sendMessage();
+                        }
+                    } else {
+                        // 固定时间模式
+                        const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
+                        if (now.getHours() === targetHour &&
+                            now.getMinutes() === targetMinute &&
+                            now.getSeconds() === (targetSecond || 0)) {
+                           
+                            addHistoryLog('定时任务触发发送（固定时间模式）', 'info');
+                            sendMessage();
+                        }
                     }
                 }
             }
         }, 1000);
+    }
+
+    // 检查当前是否应该发送
+    function checkIfShouldSendNow() {
+        const lastSendTimestamp = GM_getValue('lastSendTimestamp', 0);
+        const now = Date.now();
+        
+        // 避免短时间内重复发送（至少间隔5分钟）
+        if (now - lastSendTimestamp < 5 * 60 * 1000) {
+            return false;
+        }
+        
+        GM_setValue('lastSendTimestamp', now);
+        return true;
     }
 
     if (document.readyState === 'loading') {
