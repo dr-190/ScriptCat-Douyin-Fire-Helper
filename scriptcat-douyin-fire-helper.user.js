@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         抖音续火花自动发送助手-集成一言API和TXTAPI-支持多用户-增强版
 // @namespace    http://tampermonkey.net/
-// @version      3.1.0
+// @version      3.1.1
 // @description  每天自动发送续火消息，支持自定义时间，集成一言API和TXTAPI，支持多目标用户，记录火花天数，专属一言，随机发送时间，用户列表解析，自动重试
 // @author       飔梦 / 阚泥 / xiaohe123awa
 // @match        https://creator.douyin.com/creator-micro/data/following/chat
@@ -432,14 +432,19 @@
 
 	// 初始化聊天列表观察器
 	function initChatObserver() {
+		// 先停止旧的观察器，但不记录日志
 		if (chatObserver) {
-			chatObserver.disconnect();
-			chatObserver = null;
+			stopChatObserver('观察器初始化', true); // 传递skipLog为true
 		}
 
 		if (!userConfig.enableTargetUser || currentState !== 'searching') {
+			addHistoryLog('观察器未启动: 目标用户功能未启用或当前状态非查找中', 'warn');
 			return;
 		}
+
+		// 获取当前目标用户信息
+		const currentTargetUser = currentRetryUser || getNextTargetUser();
+		const remainingUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
 
 		chatObserver = new MutationObserver(function(mutations) {
 			clearTimeout(searchDebounceTimer);
@@ -450,27 +455,54 @@
 				}
 				lastSearchTime = now;
 
+				// 添加查找统计
+				const searchStartTime = GM_getValue('searchStartTime', now);
+				const searchDuration = now - searchStartTime;
+
+				// 记录详细查找信息
+				if (searchDuration > 1000 && searchDuration % 5000 < 100) { // 每5秒记录一次
+					addHistoryLog(`正在查找用户: ${currentTargetUser || '未知'}, 已查找 ${Math.floor(searchDuration/1000)} 秒, DOM变化 ${mutations.length} 处`, 'info');
+				}
+
 				findAndClickTargetUser();
 			}, userConfig.searchDebounceDelay);
 		});
 
 		const chatContainer = findChatContainer();
 		if (chatContainer) {
-			chatObserver.observe(chatContainer, {
-				childList: true,
-				subtree: true,
-				attributes: false,
-				characterData: false
-			});
-			addHistoryLog('聊天列表观察器已启动', 'info');
+			try {
+				chatObserver.observe(chatContainer, {
+					childList: true,
+					subtree: true,
+					attributes: false,
+					characterData: false
+				});
+
+				// 记录更详细的启动信息
+				const targetCount = allTargetUsers.length;
+				const sentCount = sentUsersToday.length;
+				const remaining = targetCount - sentCount;
+				GM_setValue('searchStartTime', Date.now());
+
+				addHistoryLog(`聊天列表观察器已启动 (目标: ${currentTargetUser || '获取中...'}, 待发送用户: ${remaining}/${targetCount}, 容器: ${chatContainer.tagName}.${chatContainer.className || 'no-class'})`, 'info');
+			} catch (error) {
+				addHistoryLog(`观察器启动失败: ${error.message}`, 'error');
+				chatObserver = null;
+			}
 		} else {
 			addHistoryLog('未找到聊天列表容器，将使用备用查找策略', 'warn');
-			chatObserver.observe(document.body, {
-				childList: true,
-				subtree: false,
-				attributes: false,
-				characterData: false
-			});
+			try {
+				chatObserver.observe(document.body, {
+					childList: true,
+					subtree: false,
+					attributes: false,
+					characterData: false
+				});
+				addHistoryLog('聊天列表观察器已启动（备用策略，监控body变化）', 'info');
+			} catch (error) {
+				addHistoryLog(`备用观察器启动失败: ${error.message}`, 'error');
+				chatObserver = null;
+			}
 		}
 	}
 
@@ -507,13 +539,50 @@
 	}
 
 	// 停止聊天观察器
-	function stopChatObserver() {
+	function stopChatObserver(reason = '未知原因', skipLog = false) {
 		if (chatObserver) {
-			chatObserver.disconnect();
+			try {
+				chatObserver.disconnect();
+				// 记录观察器详细信息
+				if (!skipLog) {
+					const targetCount = allTargetUsers.length;
+					const sentCount = sentUsersToday.length;
+					const currentTarget = currentRetryUser || getNextTargetUser();
+					addHistoryLog(`聊天列表观察器已停止 (原因: ${reason}, 目标用户: ${targetCount}个, 已发送: ${sentCount}/${targetCount}, 当前目标: ${currentTarget || '无'})`, 'info');
+				}
+			} catch (error) {
+				if (!skipLog) {
+					addHistoryLog(`停止观察器时出错: ${error.message} (原因: ${reason})`, 'error');
+				}
+			}
 			chatObserver = null;
+		} else {
+			if (!skipLog) {
+				addHistoryLog(`尝试停止聊天观察器但观察器不存在 (原因: ${reason})`, 'warn');
+			}
 		}
-		clearTimeout(searchDebounceTimer);
-		addHistoryLog('聊天列表观察器已停止', 'info');
+
+		if (searchDebounceTimer) {
+			clearTimeout(searchDebounceTimer);
+			searchDebounceTimer = null;
+		}
+
+		if (searchTimeout) {
+			clearTimeout(searchTimeout);
+			searchTimeout = null;
+		}
+
+		if (!skipLog && reason !== '观察器初始化') {
+			// 添加状态信息
+			const stateInfo = {
+				'idle': '空闲',
+				'searching': '查找中',
+				'found': '已找到用户',
+				'sending': '发送中',
+				'processing': '处理中'
+			};
+			addHistoryLog(`当前状态: ${stateInfo[currentState] || currentState}, 重试次数: ${retryCount}/${userConfig.maxRetryCount}`, 'info');
+		}
 	}
 
 	// 安全地创建鼠标事件
@@ -542,6 +611,13 @@
 		}
 	}
 
+	// 添加查找开始时间记录
+	function startUserSearch() {
+		GM_setValue('searchStartTime', Date.now());
+		GM_setValue('searchMutationCount', 0);
+		GM_setValue('searchAttemptCount', 0);
+	}
+
 	// 查找并点击目标用户
 	function findAndClickTargetUser() {
 		if (!userConfig.enableTargetUser || allTargetUsers.length === 0) {
@@ -550,6 +626,16 @@
 		}
 
 		if (currentState !== 'searching') {
+			return false;
+		}
+
+		// 增加查找尝试计数
+		let searchAttemptCount = GM_getValue('searchAttemptCount', 0) + 1;
+		GM_setValue('searchAttemptCount', searchAttemptCount);
+
+		if (searchAttemptCount > 50) {
+			addHistoryLog(`查找尝试次数过多(${searchAttemptCount})，可能DOM结构已变化`, 'error');
+			stopChatObserver('查找尝试次数过多');
 			return false;
 		}
 
@@ -622,6 +708,8 @@
 
 			if (clickSuccess) {
 				currentState = 'found';
+				stopChatObserver('成功找到目标用户');
+
 				waitForPageLoad().then(() => {
 					addHistoryLog('页面加载完成，开始查找聊天输入框', 'info');
 					tryFindChatInput();
@@ -786,7 +874,7 @@
 
 			isProcessing = false;
 			currentState = 'idle';
-			stopChatObserver();
+			stopChatObserver('达到最大重试次数');
 			currentRetryUser = null;
 			return;
 		}
@@ -800,7 +888,7 @@
 				if (currentState === 'searching') {
 					addHistoryLog('用户查找超时', 'error');
 					updateUserStatus('查找超时', false);
-					stopChatObserver();
+					stopChatObserver('用户查找超时'); // 这里记录日志
 					setTimeout(executeSendProcess, 2000);
 				}
 			}, userConfig.userSearchTimeout);
@@ -932,7 +1020,11 @@
 						updateStatus(true);
 						isProcessing = false;
 						currentState = 'idle';
-						stopChatObserver();
+						if (chatObserver) {
+							stopChatObserver('消息发送成功');
+						} else {
+							addHistoryLog('消息发送完成，观察器已不存在无需停止', 'info');
+						}
 						currentRetryUser = null;
 
 						// 重置重试计数
@@ -1351,7 +1443,26 @@
 			} else if (status === false) {
 				statusEl.textContent = '未发送';
 				statusEl.style.color = '#dc3545';
-				autoSendIfNeeded();
+
+				// 当状态变为"未发送"时，立即尝试发送一次
+				if (!isProcessing) {
+					setTimeout(() => {
+						// 检查是否今天已经发送过
+						const today = new Date().toDateString();
+						const lastSentDate = GM_getValue('lastSentDate', '');
+
+						if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
+							const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
+							if (unsentUsers.length > 0 && lastSentDate !== today) {
+								addHistoryLog('状态变为未发送，立即尝试发送', 'info');
+								sendMessage();
+							}
+						} else if (lastSentDate !== today) {
+							addHistoryLog('状态变为未发送，立即尝试发送', 'info');
+							sendMessage();
+						}
+					}, 1000); // 延迟1秒，确保状态更新完成
+				}
 			} else if (status === 'sending') {
 				statusEl.textContent = '发送中';
 				statusEl.style.color = '#ffc107';
@@ -1612,7 +1723,14 @@
 		updateTxtApiStatus('未获取');
 		updateSpecialHitokotoStatus('未获取');
 		updateUserStatusDisplay();
-		stopChatObserver();
+
+		// 不记录观察器停止日志
+		if (chatObserver) {
+			chatObserver.disconnect();
+			chatObserver = null;
+		}
+		clearTimeout(searchDebounceTimer);
+
 		if (chatInputCheckTimer) {
 			clearTimeout(chatInputCheckTimer);
 		}
