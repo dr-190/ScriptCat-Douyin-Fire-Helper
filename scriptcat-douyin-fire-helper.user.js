@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      3.1.1
 // @description  每天自动发送续火消息，支持自定义时间，集成一言API和TXTAPI，支持多目标用户，记录火花天数，专属一言，随机发送时间，用户列表解析，自动重试
-// @author       飔梦 / 阚泥 / xiaohe123awa
+// @author       飔梦 / 阚泥 / xiaohe123awa / YsKiKi
 // @match        https://creator.douyin.com/creator-micro/data/following/chat
 // @icon         https://free.picui.cn/free/2025/11/23/69226264aca4e.png
 // @grant        GM_setValue
@@ -109,8 +109,10 @@
 
 	// 新增：自动重试相关变量
 	let autoRetryTimer = null;
+	let retryResetTimer = null;
 	let lastRetryResetTime = 0;
 	let isMaxRetryReached = false;
+	let searchTimeoutId = null;
 
 	// ==================== 核心功能函数 ====================
 
@@ -173,25 +175,25 @@
 		}
 		sentUsersToday = GM_getValue('sentUsersToday', []);
 
-		if (!GM_getValue('currentUserIndex')) {
+		if (GM_getValue('currentUserIndex') == null) {
 			GM_setValue('currentUserIndex', -1);
 		}
 		currentUserIndex = GM_getValue('currentUserIndex', -1);
 
 		// 初始化重试计数
-		if (!GM_getValue('retryCount')) {
+		if (GM_getValue('retryCount') == null) {
 			GM_setValue('retryCount', 0);
 		}
 		retryCount = GM_getValue('retryCount', 0);
 
 		// 初始化最大重试达到标志
-		if (!GM_getValue('isMaxRetryReached')) {
+		if (GM_getValue('isMaxRetryReached') == null) {
 			GM_setValue('isMaxRetryReached', false);
 		}
 		isMaxRetryReached = GM_getValue('isMaxRetryReached', false);
 
 		// 初始化上次重试重置时间
-		if (!GM_getValue('lastRetryResetTime')) {
+		if (GM_getValue('lastRetryResetTime') == null) {
 			GM_setValue('lastRetryResetTime', 0);
 		}
 		lastRetryResetTime = GM_getValue('lastRetryResetTime', 0);
@@ -636,6 +638,8 @@
 		if (searchAttemptCount > 50) {
 			addHistoryLog(`查找尝试次数过多(${searchAttemptCount})，可能DOM结构已变化`, 'error');
 			stopChatObserver('查找尝试次数过多');
+			isProcessing = false;
+			currentState = 'idle';
 			return false;
 		}
 
@@ -757,21 +761,29 @@
 	// 等待页面加载完成
 	function waitForPageLoad() {
 		return new Promise((resolve, reject) => {
+			let settled = false;
+			const settle = (fn, arg) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timeout);
+				clearInterval(checkInterval);
+				window.removeEventListener('load', onLoad);
+				fn(arg);
+			};
+
 			const timeout = setTimeout(() => {
-				reject(new Error(`页面加载等待超时 (${userConfig.pageLoadWaitTime}ms)`));
+				settle(reject, new Error(`页面加载等待超时 (${userConfig.pageLoadWaitTime}ms)`));
 			}, userConfig.pageLoadWaitTime);
 
 			if (document.readyState === 'complete') {
-				clearTimeout(timeout);
-				resolve();
+				settle(resolve);
 				return;
 			}
 
-			window.addEventListener('load', function onLoad() {
-				clearTimeout(timeout);
-				window.removeEventListener('load', onLoad);
-				resolve();
-			});
+			function onLoad() {
+				settle(resolve);
+			}
+			window.addEventListener('load', onLoad);
 
 			let checkCount = 0;
 			const maxChecks = userConfig.pageLoadWaitTime / 100;
@@ -780,16 +792,12 @@
 
 				const chatInput = document.querySelector('.chat-input-dccKiL');
 				if (chatInput) {
-					clearTimeout(timeout);
-					clearInterval(checkInterval);
-					resolve();
+					settle(resolve);
 					return;
 				}
 
 				if (checkCount >= maxChecks) {
-					clearTimeout(timeout);
-					clearInterval(checkInterval);
-					reject(new Error('页面DOM变化检查超时'));
+					settle(reject, new Error('页面DOM变化检查超时'));
 				}
 			}, 100);
 		});
@@ -884,21 +892,27 @@
 		if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
 			currentState = 'searching';
 
-			const searchTimeoutId = setTimeout(() => {
+			if (searchTimeoutId) {
+				clearTimeout(searchTimeoutId);
+			}
+			searchTimeoutId = setTimeout(() => {
+				searchTimeoutId = null;
 				if (currentState === 'searching') {
 					addHistoryLog('用户查找超时', 'error');
 					updateUserStatus('查找超时', false);
-					stopChatObserver('用户查找超时'); // 这里记录日志
+					stopChatObserver('用户查找超时');
 					setTimeout(executeSendProcess, 2000);
 				}
 			}, userConfig.userSearchTimeout);
 
+			startUserSearch();
 			initChatObserver();
 
 			const found = findAndClickTargetUser();
 
-			if (!found) {
-				// 用户查找失败，观察器会继续工作
+			if (found && searchTimeoutId) {
+				clearTimeout(searchTimeoutId);
+				searchTimeoutId = null;
 			}
 		} else {
 			setTimeout(tryFindChatInput, 1000);
@@ -1120,25 +1134,25 @@
 
 		// 替换占位符
 		if (customMessage.includes('[API]')) {
-			customMessage = customMessage.replace('[API]', hitokotoContent);
+			customMessage = customMessage.replace(/\[API\]/g, hitokotoContent);
 		} else if (userConfig.useHitokoto) {
 			customMessage += ` | ${hitokotoContent}`;
 		}
 
 		if (customMessage.includes('[TXTAPI]')) {
-			customMessage = customMessage.replace('[TXTAPI]', txtApiContent);
+			customMessage = customMessage.replace(/\[TXTAPI\]/g, txtApiContent);
 		} else if (userConfig.useTxtApi) {
 			customMessage += ` | ${txtApiContent}`;
 		}
 
 		if (customMessage.includes('[专属一言]')) {
-			customMessage = customMessage.replace('[专属一言]', specialHitokotoContent);
+			customMessage = customMessage.replace(/\[专属一言\]/g, specialHitokotoContent);
 		} else if (userConfig.useSpecialHitokoto) {
 			customMessage += ` | ${specialHitokotoContent}`;
 		}
 
 		if (customMessage.includes('[天数]')) {
-			customMessage = customMessage.replace('[天数]', userConfig.fireDays || 1);
+			customMessage = customMessage.replace(/\[天数\]/g, userConfig.fireDays || 1);
 		}
 
 		return customMessage;
@@ -1443,26 +1457,6 @@
 			} else if (status === false) {
 				statusEl.textContent = '未发送';
 				statusEl.style.color = '#dc3545';
-
-				// 当状态变为"未发送"时，立即尝试发送一次
-				if (!isProcessing) {
-					setTimeout(() => {
-						// 检查是否今天已经发送过
-						const today = new Date().toDateString();
-						const lastSentDate = GM_getValue('lastSentDate', '');
-
-						if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
-							const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
-							if (unsentUsers.length > 0 && lastSentDate !== today) {
-								addHistoryLog('状态变为未发送，立即尝试发送', 'info');
-								sendMessage();
-							}
-						} else if (lastSentDate !== today) {
-							addHistoryLog('状态变为未发送，立即尝试发送', 'info');
-							sendMessage();
-						}
-					}, 1000); // 延迟1秒，确保状态更新完成
-				}
 			} else if (status === 'sending') {
 				statusEl.textContent = '发送中';
 				statusEl.style.color = '#ffc107';
@@ -1704,6 +1698,15 @@
 		GM_setValue('lastSentDate', '');
 		GM_setValue('txtApiManualSentIndexes', []);
 		GM_setValue('lastTargetUser', '');
+		specialHitokotoSentIndexes = {
+			monday: [],
+			tuesday: [],
+			wednesday: [],
+			thursday: [],
+			friday: [],
+			saturday: [],
+			sunday: []
+		};
 		GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
 		resetTodaySentUsers();
 		currentRetryUser = null;
@@ -1949,13 +1952,19 @@
             border: 1px solid rgba(255,255,255,0.1);
         `;
 
+		const escapeHtml = (str) => {
+			const div = document.createElement('div');
+			div.appendChild(document.createTextNode(str));
+			return div.innerHTML;
+		};
 		const userCheckboxes = currentUsers.map(user => {
 			const isChecked = currentTargetUsers.includes(user);
+			const safeUser = escapeHtml(user);
 			return `
             <div style="padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05);">
                 <label style="display: flex; align-items: center; cursor: pointer;">
-                    <input type="checkbox" class="user-checkbox" value="${user}" ${isChecked ? 'checked' : ''} style="margin-right: 10px;">
-                    <span style="color: #fff; font-size: 14px;">${user}</span>
+                    <input type="checkbox" class="user-checkbox" value="${safeUser}" ${isChecked ? 'checked' : ''} style="margin-right: 10px;">
+                    <span style="color: #fff; font-size: 14px;">${safeUser}</span>
                 </label>
             </div>
         `
@@ -3187,26 +3196,26 @@
 	// 启动定时重置重试任务
 	function startRetryResetTimer() {
 		if (userConfig.retryResetInterval <= 0) {
-			if (autoRetryTimer) {
-				clearTimeout(autoRetryTimer);
+			if (retryResetTimer) {
+				clearTimeout(retryResetTimer);
 			}
 			return;
 		}
 
 		const intervalMs = userConfig.retryResetInterval * 60 * 1000;
 
-		if (autoRetryTimer) {
-			clearTimeout(autoRetryTimer);
+		if (retryResetTimer) {
+			clearTimeout(retryResetTimer);
 		}
 
-		autoRetryTimer = setTimeout(function resetAndRetry() {
+		retryResetTimer = setTimeout(function resetAndRetry() {
 			if (!isProcessing) {
 				addHistoryLog(`定时重置重试任务触发，重置重试计数并尝试发送`, 'info');
 				resetRetryAndSend();
 			}
 
 			// 设置下一个定时任务
-			autoRetryTimer = setTimeout(resetAndRetry, intervalMs);
+			retryResetTimer = setTimeout(resetAndRetry, intervalMs);
 		}, intervalMs);
 
 		addHistoryLog(`已启动定时重置重试任务，每${userConfig.retryResetInterval}分钟执行一次`, 'success');
