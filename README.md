@@ -1,8 +1,8 @@
-# ScriptCat-Douyin-Fire-Helper 🔥
+# ScriptCat-Douyin-Fire-Helper 🔥 ScriptCat-抖音续火助手
 
 📌 快速跳转：[💻 挂机方案](#-挂机方案) | [💰 作者1元挂机宝](#author-shared-vps) | [⚙️ 配置说明](#️-配置说明) | [🐛 故障排除](#-故障排除)
 
-抖音续火花自动发送助手 - 每天自动发送续火消息，保持好友火花不熄灭！支持多目标用户批量发送，学生党狂喜！
+🚀 **抖音续火花自动发送助手** - 专为抖音创作者平台设计的自动化脚本，支持**自动续火花**、**多用户批量发送**、**一言API集成**、**专属一言**、**随机发送时间**等功能。完美适配 ScriptCat 和 Tampermonkey，24小时稳定挂机，保持好友火花不灭！无论是**朋友私信**还是**群消息**，都能自动查找并发送续火消息，支持**火花天数记录**、**智能重试**、**观察器状态管理**，是抖音用户保持火花的最佳工具。🔥
 
 [![GitHub license](https://img.shields.io/github/license/dr-190/ScriptCat-Douyin-Fire-Helper)](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/blob/main/LICENSE)
 [![Tampermonkey](https://img.shields.io/badge/Tampermonkey-✓-blue)](https://www.tampermonkey.net/)
@@ -10,7 +10,6 @@
 [![GitHub stars](https://img.shields.io/github/stars/dr-190/ScriptCat-Douyin-Fire-Helper)](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/stargazers)
 [![GitHub issues](https://img.shields.io/github/issues/dr-190/ScriptCat-Douyin-Fire-Helper)](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/issues)
 [![GitHub release](https://img.shields.io/github/v/release/dr-190/ScriptCat-Douyin-Fire-Helper)](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/releases)
-
 
 ## ✨ 功能特性
 
