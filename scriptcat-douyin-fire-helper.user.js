@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         抖音续火花自动发送助手-集成一言API和TXTAPI-支持多用户-增强版
+// @name         抖音续火花自动发送助手-支持多用户-多功能
 // @namespace    http://tampermonkey.net/
-// @version      3.1.1
-// @description  每天自动发送续火消息，支持自定义时间，集成一言API和TXTAPI，支持多目标用户，记录火花天数，专属一言，随机发送时间，用户列表解析，自动重试
+// @version      2026.03.22
+// @description  每天自动发送续火消息，支持自定义时间，集成一言API和TXTAPI，支持多目标用户，记录火花天数，专属一言，随机发送时间，用户列表解析，自动重试，自动切换全部标签页，精简日志
 // @author       飔梦 / 阚泥 / xiaohe123awa / YsKiKi
 // @match        https://creator.douyin.com/creator-micro/data/following/chat
 // @icon         https://free.picui.cn/free/2025/11/23/69226264aca4e.png
@@ -64,10 +64,10 @@
 		specialHitokotoFriday: "周五专属文案1\n周五专属文案2",
 		specialHitokotoSaturday: "周六专属文案1\n周六专属文案2",
 		specialHitokotoSunday: "周日专属文案1\n周日专属文案2",
-		autoRetryEnabled: false, // 新增：自动重试开关
-		autoRetryInterval: 10, // 新增：自动重试间隔（分钟）
-		retryAfterMaxReached: true, // 新增：达到最大重试后是否继续重试
-		retryResetInterval: 10 // 新增：清除重试计数并重试的间隔（分钟）
+		autoRetryEnabled: false,
+		autoRetryInterval: 10,
+		retryAfterMaxReached: true,
+		retryResetInterval: 10
 	};
 
 	// 状态变量
@@ -83,6 +83,7 @@
 	let lastSearchTime = 0;
 	let searchDebounceTimer = null;
 	let chatInputCheckTimer = null;
+	let chatInputNotFoundCount = 0;   // 新增：记录未找到输入框的连续次数
 
 	// 多用户相关变量
 	let currentUserIndex = -1;
@@ -113,6 +114,64 @@
 	let lastRetryResetTime = 0;
 	let isMaxRetryReached = false;
 	let searchTimeoutId = null;
+
+	// ==================== 新增：确保“全部”标签页激活 ====================
+	function ensureAllTabActive() {
+		return new Promise((resolve) => {
+			// 可能的选择器（优先新UI，兼容旧UI）
+			const tabSelectors = [
+				'.semi-tabs-tab',               // 新样式
+				'.sub-tab-item-yeJmWL'          // 旧样式
+			];
+			let allTab = null;
+			for (const selector of tabSelectors) {
+				const tabs = document.querySelectorAll(selector);
+				for (let tab of tabs) {
+					if (tab.textContent.trim() === '全部') {
+						allTab = tab;
+						break;
+					}
+				}
+				if (allTab) break;
+			}
+			if (!allTab) {
+				addHistoryLog('未找到“全部”标签页，继续使用当前视图', 'warn');
+				resolve();
+				return;
+			}
+			// 检查是否已激活
+			const isActive = allTab.classList.contains('active') ||
+							 allTab.classList.contains('semi-tabs-tab-active') ||
+							 allTab.getAttribute('aria-selected') === 'true';
+			if (isActive) {
+				resolve();
+				return;
+			}
+			addHistoryLog('切换到“全部”标签页以确保能查找所有用户', 'info');
+			allTab.click();
+			// 等待聊天列表刷新
+			const chatContainer = findChatContainer();
+			if (chatContainer) {
+				const observer = new MutationObserver((mutations, obs) => {
+					setTimeout(() => {
+						const userElements = document.querySelectorAll('.item-header-name-vL_79m');
+						if (userElements.length > 0) {
+							obs.disconnect();
+							resolve();
+						}
+					}, 200);
+				});
+				observer.observe(chatContainer, { childList: true, subtree: true });
+				setTimeout(() => {
+					observer.disconnect();
+					addHistoryLog('等待“全部”标签页加载超时，继续尝试', 'warn');
+					resolve();
+				}, 3000);
+			} else {
+				setTimeout(resolve, 1500);
+			}
+		});
+	}
 
 	// ==================== 核心功能函数 ====================
 
@@ -209,7 +268,7 @@
 	function parseTargetUsers() {
 		if (!userConfig.targetUsernames || !userConfig.targetUsernames.trim()) {
 			allTargetUsers = [];
-			userConfig.enableTargetUser = false; // 目标用户为空时自动关闭
+			userConfig.enableTargetUser = false;
 			return;
 		}
 
@@ -218,7 +277,6 @@
 			.map(user => user.trim())
 			.filter(user => user.length > 0);
 
-		// 目标用户不为空时自动开启
 		if (allTargetUsers.length > 0) {
 			userConfig.enableTargetUser = true;
 		}
@@ -422,7 +480,6 @@
 		const lastFireDate = userConfig.lastFireDate || '';
 
 		if (lastFireDate !== today) {
-			// 新的一天，增加天数
 			userConfig.fireDays++;
 			userConfig.lastFireDate = today;
 			GM_setValue('fireDays', userConfig.fireDays);
@@ -434,9 +491,8 @@
 
 	// 初始化聊天列表观察器
 	function initChatObserver() {
-		// 先停止旧的观察器，但不记录日志
 		if (chatObserver) {
-			stopChatObserver('观察器初始化', true); // 传递skipLog为true
+			stopChatObserver('观察器初始化', true);
 		}
 
 		if (!userConfig.enableTargetUser || currentState !== 'searching') {
@@ -444,9 +500,7 @@
 			return;
 		}
 
-		// 获取当前目标用户信息
 		const currentTargetUser = currentRetryUser || getNextTargetUser();
-		const remainingUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
 
 		chatObserver = new MutationObserver(function(mutations) {
 			clearTimeout(searchDebounceTimer);
@@ -457,14 +511,12 @@
 				}
 				lastSearchTime = now;
 
-				// 添加查找统计
-				const searchStartTime = GM_getValue('searchStartTime', now);
-				const searchDuration = now - searchStartTime;
-
-				// 记录详细查找信息
-				if (searchDuration > 1000 && searchDuration % 5000 < 100) { // 每5秒记录一次
-					addHistoryLog(`正在查找用户: ${currentTargetUser || '未知'}, 已查找 ${Math.floor(searchDuration/1000)} 秒, DOM变化 ${mutations.length} 处`, 'info');
-				}
+				// 注释掉频繁日志
+				// const searchStartTime = GM_getValue('searchStartTime', now);
+				// const searchDuration = now - searchStartTime;
+				// if (searchDuration > 1000 && searchDuration % 5000 < 100) {
+				//     addHistoryLog(`正在查找用户: ${currentTargetUser || '未知'}, 已查找 ${Math.floor(searchDuration/1000)} 秒, DOM变化 ${mutations.length} 处`, 'info');
+				// }
 
 				findAndClickTargetUser();
 			}, userConfig.searchDebounceDelay);
@@ -480,13 +532,12 @@
 					characterData: false
 				});
 
-				// 记录更详细的启动信息
 				const targetCount = allTargetUsers.length;
 				const sentCount = sentUsersToday.length;
 				const remaining = targetCount - sentCount;
 				GM_setValue('searchStartTime', Date.now());
 
-				addHistoryLog(`聊天列表观察器已启动 (目标: ${currentTargetUser || '获取中...'}, 待发送用户: ${remaining}/${targetCount}, 容器: ${chatContainer.tagName}.${chatContainer.className || 'no-class'})`, 'info');
+				addHistoryLog(`聊天列表观察器已启动 (待发送用户: ${remaining}/${targetCount})`, 'info');
 			} catch (error) {
 				addHistoryLog(`观察器启动失败: ${error.message}`, 'error');
 				chatObserver = null;
@@ -500,7 +551,7 @@
 					attributes: false,
 					characterData: false
 				});
-				addHistoryLog('聊天列表观察器已启动（备用策略，监控body变化）', 'info');
+				addHistoryLog('聊天列表观察器已启动（备用策略）', 'info');
 			} catch (error) {
 				addHistoryLog(`备用观察器启动失败: ${error.message}`, 'error');
 				chatObserver = null;
@@ -545,7 +596,6 @@
 		if (chatObserver) {
 			try {
 				chatObserver.disconnect();
-				// 记录观察器详细信息
 				if (!skipLog) {
 					const targetCount = allTargetUsers.length;
 					const sentCount = sentUsersToday.length;
@@ -575,7 +625,6 @@
 		}
 
 		if (!skipLog && reason !== '观察器初始化') {
-			// 添加状态信息
 			const stateInfo = {
 				'idle': '空闲',
 				'searching': '查找中',
@@ -631,7 +680,6 @@
 			return false;
 		}
 
-		// 增加查找尝试计数
 		let searchAttemptCount = GM_getValue('searchAttemptCount', 0) + 1;
 		GM_setValue('searchAttemptCount', searchAttemptCount);
 
@@ -645,7 +693,6 @@
 
 		let currentTargetUser;
 		if (userConfig.multiUserRetrySame && retryCount > 1 && currentRetryUser) {
-			// 重试时使用同一用户
 			currentTargetUser = currentRetryUser;
 			addHistoryLog(`重试使用同一用户: ${currentTargetUser}`, 'info');
 		} else {
@@ -804,13 +851,12 @@
 	}
 
 	// 发送消息函数
-	async function sendMessage() {
+	function sendMessage() {
 		if (isProcessing) {
 			addHistoryLog('已有任务正在进行中', 'error');
 			return;
 		}
 
-		// 重置最大重试达到标志
 		isMaxRetryReached = false;
 		GM_setValue('isMaxRetryReached', false);
 
@@ -840,9 +886,7 @@
 
 	// 执行发送流程
 	async function executeSendProcess() {
-		// 检查是否已达到最大重试次数
 		if (isMaxRetryReached && userConfig.retryAfterMaxReached) {
-			// 检查是否到了自动重试时间
 			const now = Date.now();
 			const intervalMs = userConfig.autoRetryInterval * 60 * 1000;
 
@@ -852,7 +896,6 @@
 				isProcessing = false;
 				return;
 			} else {
-				// 重置重试计数
 				retryCount = 0;
 				isMaxRetryReached = false;
 				GM_setValue('retryCount', retryCount);
@@ -873,8 +916,6 @@
 				GM_setValue('lastRetryResetTime', lastRetryResetTime);
 
 				addHistoryLog(`已达到最大重试次数 (${userConfig.maxRetryCount})，${userConfig.autoRetryInterval}分钟后将自动重试`, 'error');
-
-				// 启动自动重试计时器
 				startAutoRetryTimer();
 			} else {
 				addHistoryLog(`已达到最大重试次数 (${userConfig.maxRetryCount})，停止重试`, 'error');
@@ -890,6 +931,10 @@
 		addHistoryLog(`尝试发送 (${retryCount}/${userConfig.maxRetryCount})`, 'info');
 
 		if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
+			// 停止旧的观察器，准备重新开始
+			stopChatObserver('准备切换标签页', true);
+			// 确保当前在“全部”标签页
+			await ensureAllTabActive();
 			currentState = 'searching';
 
 			if (searchTimeoutId) {
@@ -935,14 +980,12 @@
 			if (isMaxRetryReached && !isProcessing) {
 				addHistoryLog('自动重试计时器触发，重置重试计数并重新发送', 'info');
 
-				// 重置重试计数
 				retryCount = 0;
 				isMaxRetryReached = false;
 				GM_setValue('retryCount', retryCount);
 				GM_setValue('isMaxRetryReached', false);
 				updateRetryCount();
 
-				// 重新发送
 				sendMessage();
 			}
 		}, intervalMs);
@@ -955,7 +998,6 @@
 			return;
 		}
 
-		// 重置重试计数
 		retryCount = 0;
 		isMaxRetryReached = false;
 		lastRetryResetTime = Date.now();
@@ -967,12 +1009,10 @@
 		updateRetryCount();
 		addHistoryLog(`已重置重试计数，当前重试次数: ${retryCount}`, 'success');
 
-		// 检查是否需要发送
 		autoSendIfNeeded();
 	}
 
 	// 尝试查找聊天输入框并发送消息
-	let chatInputRetryCount = 0;
 	async function tryFindChatInput() {
 		if (chatInputCheckTimer) {
 			clearTimeout(chatInputCheckTimer);
@@ -980,7 +1020,7 @@
 
 		const input = document.querySelector('.chat-input-dccKiL');
 		if (input) {
-			chatInputRetryCount = 0;
+			chatInputNotFoundCount = 0;
 			addHistoryLog('找到聊天输入框', 'info');
 
 			let messageToSend;
@@ -1017,7 +1057,6 @@
 					setTimeout(() => {
 						addHistoryLog('消息发送成功！', 'success');
 
-						// 更新火花天数（如果是今天第一次发送）
 						updateFireDays();
 
 						if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
@@ -1041,7 +1080,6 @@
 						}
 						currentRetryUser = null;
 
-						// 重置重试计数
 						retryCount = 0;
 						isMaxRetryReached = false;
 						GM_setValue('retryCount', retryCount);
@@ -1076,12 +1114,13 @@
 				}
 			}, 500);
 		} else {
-			chatInputRetryCount++;
-			addHistoryLog(`未找到输入框，继续查找中... (${chatInputRetryCount}/${userConfig.maxRetryCount})`, 'info');
-
-			if (chatInputRetryCount >= userConfig.maxRetryCount) {
+			chatInputNotFoundCount++;
+			if (chatInputNotFoundCount === 1 || chatInputNotFoundCount % 5 === 0) {
+				addHistoryLog(`未找到输入框，继续查找中... (${chatInputNotFoundCount})`, 'info');
+			}
+			if (chatInputNotFoundCount >= userConfig.maxRetryCount) {
 				addHistoryLog(`查找聊天输入框超过最大重试次数 (${userConfig.maxRetryCount})，触发重试流程`, 'error');
-				chatInputRetryCount = 0;
+				chatInputNotFoundCount = 0;
 				setTimeout(executeSendProcess, 2000);
 				return;
 			}
@@ -1132,7 +1171,6 @@
 			}
 		}
 
-		// 替换占位符
 		if (customMessage.includes('[API]')) {
 			customMessage = customMessage.replace(/\[API\]/g, hitokotoContent);
 		} else if (userConfig.useHitokoto) {
@@ -1225,14 +1263,11 @@
 		return new Promise((resolve, reject) => {
 			try {
 				const now = new Date();
-				const dayOfWeek = now.getDay(); // 0=周日, 1=周一, ..., 6=周六
-
-				// 转换为我们的键名
+				const dayOfWeek = now.getDay();
 				const dayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 				const currentDayKey = dayKeys[dayOfWeek];
 				const dayName = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][dayOfWeek];
 
-				// 获取对应日期的文本
 				const text = userConfig[`specialHitokoto${currentDayKey.charAt(0).toUpperCase() + currentDayKey.slice(1)}`] || '';
 				const lines = text.split('\n').filter(line => line.trim());
 
@@ -1242,14 +1277,12 @@
 					return;
 				}
 
-				// 获取该日期的发送记录
 				const sentIndexes = specialHitokotoSentIndexes[currentDayKey] || [];
 
 				let selectedIndex;
 				let selectedText;
 
 				if (userConfig.specialHitokotoRandom) {
-					// 随机模式
 					let availableIndexes = [];
 					for (let i = 0; i < lines.length; i++) {
 						if (!sentIndexes.includes(i)) {
@@ -1258,7 +1291,6 @@
 					}
 
 					if (availableIndexes.length === 0) {
-						// 所有都发送过了，重置
 						specialHitokotoSentIndexes[currentDayKey] = [];
 						sentIndexes.length = 0;
 						availableIndexes = Array.from({
@@ -1270,11 +1302,9 @@
 					selectedIndex = availableIndexes[randomIndex];
 					selectedText = lines[selectedIndex].trim();
 
-					// 记录发送
 					specialHitokotoSentIndexes[currentDayKey].push(selectedIndex);
 					GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
 				} else {
-					// 顺序模式
 					let nextIndex = 0;
 					if (sentIndexes.length > 0) {
 						nextIndex = (sentIndexes[sentIndexes.length - 1] + 1) % lines.length;
@@ -1283,7 +1313,6 @@
 					selectedIndex = nextIndex;
 					selectedText = lines[selectedIndex].trim();
 
-					// 记录发送
 					specialHitokotoSentIndexes[currentDayKey].push(selectedIndex);
 					GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
 				}
@@ -1414,32 +1443,26 @@
 
 		const now = new Date();
 
-		// 解析时间范围
 		const [startHour, startMinute, startSecond] = userConfig.sendTimeRangeStart.split(':').map(Number);
 		const [endHour, endMinute, endSecond] = userConfig.sendTimeRangeEnd.split(':').map(Number);
 
-		// 转换为分钟数
 		const startMinutes = startHour * 60 + startMinute;
 		const endMinutes = endHour * 60 + endMinute;
 
 		let randomMinutes;
 
-		// 处理跨天情况
 		if (endMinutes > startMinutes) {
 			randomMinutes = startMinutes + Math.floor(Math.random() * (endMinutes - startMinutes));
 		} else {
-			// 跨天情况
 			randomMinutes = startMinutes + Math.floor(Math.random() * (1440 - startMinutes + endMinutes));
 		}
 
-		// 转换回小时和分钟
 		const randomHour = Math.floor(randomMinutes / 60) % 24;
 		const randomMinute = randomMinutes % 60;
 
 		const targetTime = new Date(now);
 		targetTime.setHours(randomHour, randomMinute, startSecond || 0, 0);
 
-		// 如果随机时间已经过去，就安排到明天
 		if (targetTime <= now) {
 			targetTime.setDate(targetTime.getDate() + 1);
 		}
@@ -1513,7 +1536,6 @@
 
 	// 检查是否需要自动发送
 	function autoSendIfNeeded() {
-		// 检查是否正在处理中
 		if (isProcessing) {
 			return;
 		}
@@ -1522,7 +1544,6 @@
 		const today = new Date().toDateString();
 
 		if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
-			// 检查是否需要为新的一天重置记录
 			const shouldResetForNewDay = checkIfShouldResetForNewDay();
 
 			if (shouldResetForNewDay) {
@@ -1532,10 +1553,8 @@
 
 			const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
 			if (unsentUsers.length > 0 && !isProcessing) {
-				// 获取今天的目标时间
 				let targetTimeToday;
 				if (userConfig.sendTimeRandom) {
-					// 对于随机时间，我们检查是否在时间范围内
 					const [startHour, startMinute] = userConfig.sendTimeRangeStart.split(':').map(Number);
 					const [endHour, endMinute] = userConfig.sendTimeRangeEnd.split(':').map(Number);
 
@@ -1543,13 +1562,10 @@
 					const startMinutes = startHour * 60 + startMinute;
 					const endMinutes = endHour * 60 + endMinute;
 
-					// 检查是否在时间范围内
 					let isInRange = false;
 					if (endMinutes > startMinutes) {
-						// 不跨天
 						isInRange = nowMinutes >= startMinutes && nowMinutes <= endMinutes;
 					} else {
-						// 跨天
 						isInRange = nowMinutes >= startMinutes || nowMinutes <= endMinutes;
 					}
 
@@ -1573,7 +1589,6 @@
 
 			if (lastSentDate !== today) {
 				if (userConfig.sendTimeRandom) {
-					// 对于随机时间，我们检查是否在时间范围内
 					const [startHour, startMinute] = userConfig.sendTimeRangeStart.split(':').map(Number);
 					const [endHour, endMinute] = userConfig.sendTimeRangeEnd.split(':').map(Number);
 
@@ -1581,13 +1596,10 @@
 					const startMinutes = startHour * 60 + startMinute;
 					const endMinutes = endHour * 60 + endMinute;
 
-					// 检查是否在时间范围内
 					let isInRange = false;
 					if (endMinutes > startMinutes) {
-						// 不跨天
 						isInRange = nowMinutes >= startMinutes && nowMinutes <= endMinutes;
 					} else {
-						// 跨天
 						isInRange = nowMinutes >= startMinutes || nowMinutes <= endMinutes;
 					}
 
@@ -1628,7 +1640,6 @@
 				updateStatus('sending');
 
 				if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
-					// 检查是否需要为新的一天重置记录
 					const shouldResetForNewDay = checkIfShouldResetForNewDay();
 					if (shouldResetForNewDay) {
 						addHistoryLog('新的一天开始，重置今日发送记录', 'info');
@@ -1642,7 +1653,6 @@
 							sendMessage();
 						}
 					} else {
-						// 所有用户已完成，记录重置日期
 						GM_setValue('lastResetDate', new Date().toDateString());
 						nextSendTime = parseRandomTimeString();
 						const tomorrow = new Date(now);
@@ -1662,7 +1672,7 @@
 						const tomorrow = new Date(now);
 						tomorrow.setDate(tomorrow.getDate() + 1);
 						if (nextSendTime.getDate() !== tomorrow.getDate()) {
-							nextSendTime.setDate(tomorrow.getDate());
+							nextSendTime.setDate(nextSendTime.getDate() + 1);
 						}
 						startCountdown(nextSendTime);
 						updateStatus(true);
@@ -1711,7 +1721,6 @@
 		resetTodaySentUsers();
 		currentRetryUser = null;
 
-		// 重置重试相关数据
 		retryCount = 0;
 		isMaxRetryReached = false;
 		lastRetryResetTime = 0;
@@ -1727,7 +1736,6 @@
 		updateSpecialHitokotoStatus('未获取');
 		updateUserStatusDisplay();
 
-		// 不记录观察器停止日志
 		if (chatObserver) {
 			chatObserver.disconnect();
 			chatObserver = null;
@@ -1866,7 +1874,6 @@
 		GM_setValue('lastSentDate', '');
 		currentRetryUser = null;
 
-		// 记录重置日期
 		const today = new Date().toDateString();
 		GM_setValue('lastResetDate', today);
 
@@ -1922,7 +1929,6 @@
 			return;
 		}
 
-		// 获取现有目标用户
 		let currentTargetUsers = [];
 		if (userConfig.targetUsernames && userConfig.targetUsernames.trim()) {
 			currentTargetUsers = userConfig.targetUsernames.split('\n')
@@ -2017,7 +2023,6 @@
 		const cancelBtn = document.getElementById('dy-fire-user-select-cancel');
 		const closeBtn = document.getElementById('dy-fire-user-select-close');
 
-		// 全选
 		selectAllBtn.addEventListener('click', function() {
 			const checkboxes = userSelectPanel.querySelectorAll('.user-checkbox');
 			checkboxes.forEach(checkbox => {
@@ -2025,7 +2030,6 @@
 			});
 		});
 
-		// 取消全选
 		deselectAllBtn.addEventListener('click', function() {
 			const checkboxes = userSelectPanel.querySelectorAll('.user-checkbox');
 			checkboxes.forEach(checkbox => {
@@ -2033,7 +2037,6 @@
 			});
 		});
 
-		// 更新目标用户
 		addBtn.addEventListener('click', function() {
 			const checkboxes = userSelectPanel.querySelectorAll('.user-checkbox');
 			const selectedUsers = [];
@@ -2044,10 +2047,9 @@
 				}
 			});
 
-			// 更新配置
 			userConfig.targetUsernames = selectedUsers.join('\n');
 			saveConfig();
-			parseTargetUsers(); // 这会自动设置enableTargetUser
+			parseTargetUsers();
 			updateUserStatusDisplay();
 
 			if (selectedUsers.length > 0) {
@@ -2059,17 +2061,14 @@
 			userSelectPanel.remove();
 		});
 
-		// 取消
 		cancelBtn.addEventListener('click', function() {
 			userSelectPanel.remove();
 		});
 
-		// 关闭
 		closeBtn.addEventListener('click', function() {
 			userSelectPanel.remove();
 		});
 
-		// 悬停效果
 		[selectAllBtn, deselectAllBtn, addBtn, cancelBtn].forEach(btn => {
 			btn.addEventListener('mouseenter', function() {
 				this.style.transform = 'translateY(-2px)';
@@ -2096,7 +2095,6 @@
 			const days = parseInt(newDays, 10);
 			if (!isNaN(days) && days >= 0) {
 				userConfig.fireDays = days;
-				// 修改天数时更新最后火花日期为今天，避免今天重复增加
 				const today = new Date().toISOString().split('T')[0];
 				userConfig.lastFireDate = today;
 				GM_setValue('fireDays', days);
@@ -2971,7 +2969,6 @@
 		styleEl.textContent = navStyle;
 		settingsPanel.appendChild(styleEl);
 
-		// 随机时间切换
 		document.getElementById('dy-fire-settings-time-random').addEventListener('change', function() {
 			const isRandom = this.checked;
 			document.getElementById('fixed-time-container').style.display = isRandom ? 'none' : 'block';
@@ -3054,12 +3051,10 @@
 		const fromWhoFormat = document.getElementById('dy-fire-settings-from-who-format').value;
 		const customMessage = document.getElementById('dy-fire-settings-custom-message').value;
 
-		// 新增：重试设置
 		const retryAfterMaxReached = document.getElementById('dy-fire-settings-retry-after-max').checked;
 		const autoRetryInterval = parseInt(document.getElementById('dy-fire-settings-auto-retry-interval').value, 10);
 		const retryResetInterval = parseInt(document.getElementById('dy-fire-settings-retry-reset-interval').value, 10);
 
-		// 专属一言文案
 		const specialMonday = document.getElementById('dy-fire-settings-special-monday').value;
 		const specialTuesday = document.getElementById('dy-fire-settings-special-tuesday').value;
 		const specialWednesday = document.getElementById('dy-fire-settings-special-wednesday').value;
@@ -3068,7 +3063,6 @@
 		const specialSaturday = document.getElementById('dy-fire-settings-special-saturday').value;
 		const specialSunday = document.getElementById('dy-fire-settings-special-sunday').value;
 
-		// 时间格式验证
 		const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/;
 
 		if (!timeRandom && !timeRegex.test(timeValue)) {
@@ -3160,12 +3154,10 @@
 		userConfig.fromWhoFormat = fromWhoFormat;
 		userConfig.customMessage = customMessage;
 
-		// 新增：重试设置
 		userConfig.retryAfterMaxReached = retryAfterMaxReached;
 		userConfig.autoRetryInterval = autoRetryInterval;
 		userConfig.retryResetInterval = retryResetInterval;
 
-		// 专属一言文案
 		userConfig.specialHitokotoMonday = specialMonday;
 		userConfig.specialHitokotoTuesday = specialTuesday;
 		userConfig.specialHitokotoWednesday = specialWednesday;
@@ -3174,7 +3166,6 @@
 		userConfig.specialHitokotoSaturday = specialSaturday;
 		userConfig.specialHitokotoSunday = specialSunday;
 
-		// 自动设置enableTargetUser
 		const targetUsers = targetUsernames.trim().split('\n').filter(user => user.trim().length > 0);
 		userConfig.enableTargetUser = targetUsers.length > 0;
 
@@ -3182,14 +3173,12 @@
 		parseTargetUsers();
 		updateUserStatusDisplay();
 
-		// 重置倒计时
 		nextSendTime = parseRandomTimeString();
 		startCountdown(nextSendTime);
 
 		document.getElementById('dy-fire-settings-panel').remove();
 		addHistoryLog('设置已保存', 'success');
 
-		// 启动定时重置任务
 		startRetryResetTimer();
 	}
 
@@ -3214,7 +3203,6 @@
 				resetRetryAndSend();
 			}
 
-			// 设置下一个定时任务
 			retryResetTimer = setTimeout(resetAndRetry, intervalMs);
 		}, intervalMs);
 
@@ -3275,7 +3263,6 @@
 
 		addHistoryLog('抖音续火助手已启动', 'info');
 
-		// 启动定时重置任务
 		startRetryResetTimer();
 
 		setInterval(() => {
@@ -3287,7 +3274,6 @@
 				const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
 				if (unsentUsers.length > 0) {
 					if (userConfig.sendTimeRandom) {
-						// 随机时间模式，检查是否在时间范围内
 						const [startHour, startMinute] = userConfig.sendTimeRangeStart.split(':').map(Number);
 						const [endHour, endMinute] = userConfig.sendTimeRangeEnd.split(':').map(Number);
 
@@ -3297,10 +3283,8 @@
 
 						let isInRange = false;
 						if (endMinutes > startMinutes) {
-							// 不跨天
 							isInRange = nowMinutes >= startMinutes && nowMinutes <= endMinutes;
 						} else {
-							// 跨天
 							isInRange = nowMinutes >= startMinutes || nowMinutes <= endMinutes;
 						}
 
@@ -3312,7 +3296,6 @@
 							}
 						}
 					} else {
-						// 固定时间模式
 						const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
 						if (now.getHours() === targetHour &&
 							now.getMinutes() === targetMinute &&
@@ -3329,7 +3312,6 @@
 			} else {
 				if (lastSentDate !== today) {
 					if (userConfig.sendTimeRandom) {
-						// 随机时间模式
 						const [startHour, startMinute] = userConfig.sendTimeRangeStart.split(':').map(Number);
 						const [endHour, endMinute] = userConfig.sendTimeRangeEnd.split(':').map(Number);
 
@@ -3339,10 +3321,8 @@
 
 						let isInRange = false;
 						if (endMinutes > startMinutes) {
-							// 不跨天
 							isInRange = nowMinutes >= startMinutes && nowMinutes <= endMinutes;
 						} else {
-							// 跨天
 							isInRange = nowMinutes >= startMinutes || nowMinutes <= endMinutes;
 						}
 
@@ -3351,7 +3331,6 @@
 							sendMessage();
 						}
 					} else {
-						// 固定时间模式
 						const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
 						if (now.getHours() === targetHour &&
 							now.getMinutes() === targetMinute &&
@@ -3371,7 +3350,6 @@
 		const lastSendTimestamp = GM_getValue('lastSendTimestamp', 0);
 		const now = Date.now();
 
-		// 避免短时间内重复发送（至少间隔5分钟）
 		if (now - lastSendTimestamp < 5 * 60 * 1000) {
 			return false;
 		}
