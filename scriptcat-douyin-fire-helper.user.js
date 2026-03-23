@@ -78,7 +78,7 @@
 	let lastSearchTime = 0;
 	let searchDebounceTimer = null;
 	let chatInputCheckTimer = null;
-	let chatInputNotFoundCount = 0;   // 新增：记录未找到输入框的连续次数
+	let chatInputNotFoundCount = 0;   // 记录未找到输入框的连续次数
 
 	// 多用户相关变量
 	let currentUserIndex = -1;
@@ -103,14 +103,18 @@
 	let dragOffsetY = 0;
 	let currentPanel = null;
 
-	// 新增：自动重试相关变量
+	// 自动重试相关变量
 	let autoRetryTimer = null;
 	let retryResetTimer = null;
 	let lastRetryResetTime = 0;
 	let isMaxRetryReached = false;
 	let searchTimeoutId = null;
 
-	// 新增：user_id <-> nickname 映射（从API获取）
+	// 滚动查找相关变量
+	let isScrollSearching = false;
+	let scrollSearchGeneration = 0;
+
+	// user_id <-> nickname 映射（从API获取）
 	let userApiMap = {}; // { user_id: { user_id, nickname } }
 
 	// 拖拽全局监听器是否已绑定
@@ -215,7 +219,7 @@
 		GM_setValue('lastRetryResetTime', 0);
 	}
 
-	// ==================== API interception: capture full user list ====================
+	// ==================== API拦截：捕获完整的用户列表 ====================
 
 	function processUserApiResponse(userList) {
 		if (!Array.isArray(userList)) return;
@@ -244,7 +248,7 @@
 			const nickname = line.trim();
 			if (!nickname) return line;
 			const userId = nicknameUserIdMap[nickname];
-			if (!userId) return line; // 手动输入、无 user_id 关联，跳过
+			if (!userId) return line; // 手动输入且无 user_id 关联，跳过
 			const apiEntry = userApiMap[userId];
 			if (apiEntry && apiEntry.nickname !== nickname) {
 				const newNickname = apiEntry.nickname;
@@ -313,7 +317,7 @@
 		return null;
 	}
 
-	// ==================== 新增：确保“全部”标签页激活 ====================
+	// ==================== 确保“全部”标签页激活 ====================
 	function ensureAllTabActive() {
 		return new Promise((resolve) => {
 			// 可能的选择器（优先新UI，兼容旧UI）
@@ -844,6 +848,168 @@
 		GM_setValue('searchAttemptCount', 0);
 	}
 
+	// 点击已找到的目标用户元素（提取的公共逻辑）
+	function clickFoundUser(targetElement, username) {
+		addHistoryLog(`找到目标用户: ${username}`, 'success');
+		updateUserStatus(`已找到: ${username}`, true);
+
+		let clickSuccess = false;
+
+		if (userConfig.clickMethod === 'direct') {
+			try {
+				targetElement.click();
+				addHistoryLog('使用直接点击方法成功', 'success');
+				clickSuccess = true;
+			} catch (error) {
+				addHistoryLog(`直接点击失败: ${error.message}`, 'error');
+			}
+		} else {
+			try {
+				const clickEvent = createSafeMouseEvent('click');
+				if (clickEvent) {
+					targetElement.dispatchEvent(clickEvent);
+					addHistoryLog('使用事件触发方法成功', 'success');
+					clickSuccess = true;
+				} else {
+					targetElement.click();
+					addHistoryLog('事件创建失败，使用直接点击成功', 'success');
+					clickSuccess = true;
+				}
+			} catch (error) {
+				addHistoryLog(`事件触发失败: ${error.message}`, 'error');
+			}
+		}
+
+		if (clickSuccess) {
+			currentState = 'found';
+			stopChatObserver('成功找到目标用户');
+			if (searchTimeoutId) {
+				clearTimeout(searchTimeoutId);
+				searchTimeoutId = null;
+			}
+			waitForPageAndInput();
+			return true;
+		}
+
+		// 回退：尝试点击父元素
+		try {
+			let clickableParent = targetElement;
+			for (let i = 0; i < 5; i++) {
+				clickableParent = clickableParent.parentElement;
+				if (!clickableParent) break;
+
+				const style = window.getComputedStyle(clickableParent);
+				if (style.cursor === 'pointer' || clickableParent.onclick) {
+					clickableParent.click();
+					addHistoryLog('通过父元素点击成功', 'success');
+					currentState = 'found';
+					stopChatObserver('通过父元素点击成功');
+					if (searchTimeoutId) {
+						clearTimeout(searchTimeoutId);
+						searchTimeoutId = null;
+					}
+					waitForPageAndInput();
+					return true;
+				}
+			}
+		} catch (error) {
+			addHistoryLog(`父元素点击也失败: ${error.message}`, 'error');
+		}
+
+		updateUserStatus('点击失败', false);
+		return false;
+	}
+
+	// 滚动聊天列表查找目标用户（解决虚拟列表中用户不在可视区域的问题）
+	function scrollToFindAndClickUser(targetUser) {
+		const myGeneration = ++scrollSearchGeneration;
+		isScrollSearching = true;
+
+		// 滚动期间停止观察器避免干扰
+		stopChatObserver('开始滚动查找', true);
+
+		const ITEM_SEL = '.item-header-name-vL_79m';
+		const NO_MORE_SEL = '.no-more-tip-ftdJnu';
+
+		// 查找可滚动的聊天列表容器
+		let container = null;
+		const sampleEl = document.querySelector(ITEM_SEL);
+		if (sampleEl) {
+			let el = sampleEl.parentElement;
+			while (el && el !== document.body) {
+				const s = window.getComputedStyle(el);
+				if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 10) {
+					container = el;
+					break;
+				}
+				el = el.parentElement;
+			}
+		}
+
+		if (!container) {
+			addHistoryLog('未找到可滚动容器，无法滚动查找', 'warn');
+			isScrollSearching = false;
+			return;
+		}
+
+		const origScrollTop = container.scrollTop;
+		let lastScrollTop = -1;
+		let stuckCount = 0;
+
+		addHistoryLog(`开始滚动查找用户: ${targetUser}`, 'info');
+
+		const checkForUser = () => {
+			const userElements = document.querySelectorAll(ITEM_SEL);
+			for (let el of userElements) {
+				if (el.textContent.trim() === targetUser) {
+					return el;
+				}
+			}
+			return null;
+		};
+
+		const step = () => {
+			// 如果被新的滚动查找取代，或状态已不再是searching，则中止
+			if (myGeneration !== scrollSearchGeneration || currentState !== 'searching') {
+				container.scrollTop = origScrollTop;
+				isScrollSearching = false;
+				return;
+			}
+
+			const foundEl = checkForUser();
+			if (foundEl) {
+				isScrollSearching = false;
+				clickFoundUser(foundEl, targetUser);
+				return;
+			}
+
+			// 到底了仍未找到
+			if (document.querySelector(NO_MORE_SEL)) {
+				addHistoryLog(`滚动到底部未找到用户: ${targetUser}`, 'warn');
+				container.scrollTop = origScrollTop;
+				isScrollSearching = false;
+				return;
+			}
+
+			container.scrollTop += 500;
+
+			if (container.scrollTop === lastScrollTop) {
+				if (++stuckCount >= 4) {
+					addHistoryLog(`滚动查找结束，未找到用户: ${targetUser}`, 'warn');
+					container.scrollTop = origScrollTop;
+					isScrollSearching = false;
+					return;
+				}
+			} else {
+				stuckCount = 0;
+			}
+			lastScrollTop = container.scrollTop;
+			setTimeout(step, 350);
+		};
+
+		setTimeout(step, 100);
+	}
+
 	// 查找并点击目标用户
 	function findAndClickTargetUser() {
 		if (!userConfig.enableTargetUser || allTargetUsers.length === 0) {
@@ -900,68 +1066,13 @@
 		}
 
 		if (targetElement) {
-			addHistoryLog(`找到目标用户: ${currentTargetUser}`, 'success');
-			updateUserStatus(`已找到: ${currentTargetUser}`, true);
-
-			let clickSuccess = false;
-
-			if (userConfig.clickMethod === 'direct') {
-				try {
-					targetElement.click();
-					addHistoryLog('使用直接点击方法成功', 'success');
-					clickSuccess = true;
-				} catch (error) {
-					addHistoryLog(`直接点击失败: ${error.message}`, 'error');
-				}
-			} else {
-				try {
-					const clickEvent = createSafeMouseEvent('click');
-					if (clickEvent) {
-						targetElement.dispatchEvent(clickEvent);
-						addHistoryLog('使用事件触发方法成功', 'success');
-						clickSuccess = true;
-					} else {
-						targetElement.click();
-						addHistoryLog('事件创建失败，使用直接点击成功', 'success');
-						clickSuccess = true;
-					}
-				} catch (error) {
-					addHistoryLog(`事件触发失败: ${error.message}`, 'error');
-				}
-			}
-
-			if (clickSuccess) {
-				currentState = 'found';
-				stopChatObserver('成功找到目标用户');
-				waitForPageAndInput();
-				return true;
-			} else {
-				try {
-					let clickableParent = targetElement;
-					for (let i = 0; i < 5; i++) {
-						clickableParent = clickableParent.parentElement;
-						if (!clickableParent) break;
-
-						const style = window.getComputedStyle(clickableParent);
-						if (style.cursor === 'pointer' || clickableParent.onclick) {
-							clickableParent.click();
-							addHistoryLog('通过父元素点击成功', 'success');
-							currentState = 'found';
-							stopChatObserver('通过父元素点击成功');
-							waitForPageAndInput();
-							return true;
-						}
-					}
-				} catch (error) {
-					addHistoryLog(`父元素点击也失败: ${error.message}`, 'error');
-				}
-
-				updateUserStatus('点击失败', false);
-				return false;
-			}
+			return clickFoundUser(targetElement, currentTargetUser);
 		} else {
-			addHistoryLog(`未找到目标用户: ${currentTargetUser}`, 'warn');
-			updateUserStatus(`寻找: ${currentTargetUser}`, null);
+			// 用户不在当前可视DOM中，启动滚动查找（仅在任务执行中且未在滚动时）
+			if (!isScrollSearching) {
+				addHistoryLog(`用户 ${currentTargetUser} 不在可视区域，启动滚动查找`, 'info');
+				scrollToFindAndClickUser(currentTargetUser);
+			}
 			return false;
 		}
 	}
@@ -1107,6 +1218,11 @@
 					addHistoryLog('用户查找超时', 'error');
 					updateUserStatus('查找超时', false);
 					stopChatObserver('用户查找超时');
+					// 中止正在进行的滚动查找
+					if (isScrollSearching) {
+						scrollSearchGeneration++;
+						isScrollSearching = false;
+					}
 					setTimeout(executeSendProcess, 2000);
 				}
 			}, userConfig.userSearchTimeout);
