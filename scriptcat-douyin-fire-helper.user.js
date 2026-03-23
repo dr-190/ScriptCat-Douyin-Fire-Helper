@@ -1195,18 +1195,15 @@
 
 			currentState = 'sending';
 			input.textContent = '';
-			input.focus();
-
-			const lines = messageToSend.split('\n');
-			for (let i = 0; i < lines.length; i++) {
-				document.execCommand('insertText', false, lines[i]);
-				if (i < lines.length - 1) {
-					document.execCommand('insertLineBreak');
-				}
-			}
-
-			input.dispatchEvent(new Event('input', {
-				bubbles: true
+			input.innerHTML = messageToSend.split('\n').map(line => {
+				const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+				return escaped || '<br>';
+			}).join('<br>');
+			input.dispatchEvent(new InputEvent('input', {
+				bubbles: true,
+				cancelable: true,
+				inputType: 'insertText',
+				data: messageToSend
 			}));
 
 			setTimeout(() => {
