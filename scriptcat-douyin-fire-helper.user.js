@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         抖音续火花自动发送助手-支持多用户-多功能
 // @namespace    http://tampermonkey.net/
-// @version      2026.03.22
+// @version      2026.04.03
 // @description  每天自动发送续火消息，支持自定义时间，集成一言API和TXTAPI，支持多目标用户，记录火花天数，专属一言，随机发送时间，用户列表解析，自动重试，自动切换全部标签页，精简日志
 // @author       飔梦 / 阚泥 / xiaohe123awa / YsKiKi
 // @match        https://creator.douyin.com/creator-micro/data/following/chat
@@ -356,7 +356,7 @@
 			if (chatContainer) {
 				const observer = new MutationObserver((mutations, obs) => {
 					setTimeout(() => {
-						const userElements = document.querySelectorAll('.item-header-name-vL_79m');
+						const userElements = document.querySelectorAll('[class*="item-header-name-"]');
 						if (userElements.length > 0) {
 							obs.disconnect();
 							resolve();
@@ -760,7 +760,7 @@
 			}
 		}
 
-		const sampleUser = document.querySelector('.item-header-name-vL_79m');
+		const sampleUser = document.querySelector('[class*="item-header-name-"]');
 		if (sampleUser) {
 			let parent = sampleUser;
 			for (let i = 0; i < 10; i++) {
@@ -928,8 +928,8 @@
 		// 滚动期间停止观察器避免干扰
 		stopChatObserver('开始滚动查找', true);
 
-		const ITEM_SEL = '.item-header-name-vL_79m';
-		const NO_MORE_SEL = '.no-more-tip-ftdJnu';
+		const ITEM_SEL = '[class*="item-header-name-"]';
+		const NO_MORE_SEL = '[class*="no-more-tip-"]';
 
 		// 查找可滚动的聊天列表容器
 		let container = null;
@@ -1055,7 +1055,7 @@
 		addHistoryLog(`查找目标用户: ${currentTargetUser}`, 'info');
 		updateUserStatus(`寻找: ${currentTargetUser}`, null);
 
-		const userElements = document.querySelectorAll('.item-header-name-vL_79m');
+		const userElements = document.querySelectorAll('[class*="item-header-name-"]');
 		let targetElement = null;
 
 		for (let element of userElements) {
@@ -1109,7 +1109,7 @@
 			const checkInterval = setInterval(() => {
 				checkCount++;
 
-				const chatInput = document.querySelector('.chat-input-dccKiL');
+				const chatInput = document.querySelector('[class*="chat-input-"]');
 				if (chatInput) {
 					settle(resolve);
 					return;
@@ -1295,7 +1295,7 @@
 			clearTimeout(chatInputCheckTimer);
 		}
 
-		const input = document.querySelector('.chat-input-dccKiL');
+		const input = document.querySelector('[class*="chat-input-"]');
 		if (input) {
 			chatInputNotFoundCount = 0;
 			addHistoryLog('找到聊天输入框', 'info');
@@ -2033,8 +2033,8 @@
 	// onNewItems(newNicknames[]) — 每轮新发现的昵称数组
 	// onDone() — 滚动结束
 	function autoScrollChatListAndCollect(panelEl, onNewItems, onDone) {
-		const ITEM_SEL = '.item-header-name-vL_79m';
-		const NO_MORE_SEL = '.no-more-tip-ftdJnu';
+		const ITEM_SEL = '[class*="item-header-name-"]';
+		const NO_MORE_SEL = '[class*="no-more-tip-"]';
 		const seen = new Set();
 
 		// 扫描当前 DOM，返回本次新增的昵称数组
