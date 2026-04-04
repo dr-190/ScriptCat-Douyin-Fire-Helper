@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         抖音续火花自动发送助手-支持多用户-多功能
 // @namespace    http://tampermonkey.net/
-// @version      2026.03.22
+// @version      2026.04.03
 // @description  每天自动发送续火消息，支持自定义时间，集成一言API和TXTAPI，支持多目标用户，记录火花天数，专属一言，随机发送时间，用户列表解析，自动重试，自动切换全部标签页，精简日志
 // @author       飔梦 / 阚泥 / xiaohe123awa / YsKiKi
 // @match        https://creator.douyin.com/creator-micro/data/following/chat
@@ -26,15 +26,12 @@
 		sendTimeRandom: false,
 		sendTimeRangeStart: "23:30:00",
 		sendTimeRangeEnd: "00:30:00",
-		checkInterval: 1000,
-		maxWaitTime: 30000,
 		maxRetryCount: 3,
 		hitokotoTimeout: 60000,
 		txtApiTimeout: 60000,
 		useHitokoto: true,
 		useTxtApi: true,
 		useSpecialHitokoto: true,
-		specialHitokotoMode: "random",
 		specialHitokotoRandom: true,
 		txtApiMode: "manual",
 		txtApiManualRandom: true,
@@ -64,7 +61,6 @@
 		specialHitokotoFriday: "周五专属文案1\n周五专属文案2",
 		specialHitokotoSaturday: "周六专属文案1\n周六专属文案2",
 		specialHitokotoSunday: "周日专属文案1\n周日专属文案2",
-		autoRetryEnabled: false,
 		autoRetryInterval: 10,
 		retryAfterMaxReached: true,
 		retryResetInterval: 10
@@ -79,11 +75,10 @@
 	let nextSendTime = null;
 	let currentState = "idle";
 	let chatObserver = null;
-	let searchTimeout = null;
 	let lastSearchTime = 0;
 	let searchDebounceTimer = null;
 	let chatInputCheckTimer = null;
-	let chatInputNotFoundCount = 0;   // 新增：记录未找到输入框的连续次数
+	let chatInputNotFoundCount = 0;   // 记录未找到输入框的连续次数
 
 	// 多用户相关变量
 	let currentUserIndex = -1;
@@ -108,14 +103,221 @@
 	let dragOffsetY = 0;
 	let currentPanel = null;
 
-	// 新增：自动重试相关变量
+	// 自动重试相关变量
 	let autoRetryTimer = null;
 	let retryResetTimer = null;
 	let lastRetryResetTime = 0;
 	let isMaxRetryReached = false;
 	let searchTimeoutId = null;
 
-	// ==================== 新增：确保“全部”标签页激活 ====================
+	// 滚动查找相关变量
+	let isScrollSearching = false;
+	let scrollSearchGeneration = 0;
+
+	// user_id <-> nickname 映射（从API获取）
+	let userApiMap = {}; // { user_id: { user_id, nickname } }
+
+	// 拖拽全局监听器是否已绑定
+	let dragListenersAttached = false;
+
+	// ==================== 通用辅助函数 ====================
+
+	// 判断当前时间是否在配置的发送时间范围内（支持跨天）
+	function isCurrentTimeInRange() {
+		const [startHour, startMinute] = userConfig.sendTimeRangeStart.split(':').map(Number);
+		const [endHour, endMinute] = userConfig.sendTimeRangeEnd.split(':').map(Number);
+		const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
+		const startMinutes = startHour * 60 + startMinute;
+		const endMinutes = endHour * 60 + endMinute;
+		if (endMinutes > startMinutes) {
+			return nowMinutes >= startMinutes && nowMinutes <= endMinutes;
+		} else {
+			return nowMinutes >= startMinutes || nowMinutes <= endMinutes;
+		}
+	}
+
+	// 判断当前是否已到达固定发送时间
+	function isAtOrPastSendTime() {
+		const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
+		const targetTimeToday = new Date();
+		targetTimeToday.setHours(targetHour, targetMinute, targetSecond || 0, 0);
+		return new Date() >= targetTimeToday;
+	}
+
+	// 判断当前是否精确匹配固定发送时间（秒级）
+	function isExactSendTime() {
+		const now = new Date();
+		const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
+		return now.getHours() === targetHour &&
+			now.getMinutes() === targetMinute &&
+			now.getSeconds() === (targetSecond || 0);
+	}
+
+	// 通用 DOM 元素状态更新
+	function updateElementStatus(elementId, status, isSuccess = true) {
+		const statusEl = document.getElementById(elementId);
+		if (statusEl) {
+			statusEl.textContent = status;
+			statusEl.style.color = isSuccess ? '#00d8b8' : '#ff2c54';
+		}
+	}
+
+	// 从文本行列表中随机/顺序选取一项，自动记录已选索引并在全部选完后重置
+	// 返回 { index, text } 或 null
+	function pickFromTextList(lines, sentIndexes, isRandom) {
+		if (!lines || lines.length === 0) return null;
+
+		let availableIndexes;
+		if (isRandom) {
+			availableIndexes = [];
+			for (let i = 0; i < lines.length; i++) {
+				if (!sentIndexes.includes(i)) availableIndexes.push(i);
+			}
+			if (availableIndexes.length === 0) {
+				sentIndexes.length = 0;
+				availableIndexes = Array.from({ length: lines.length }, (_, i) => i);
+			}
+			const selectedIndex = availableIndexes[Math.floor(Math.random() * availableIndexes.length)];
+			sentIndexes.push(selectedIndex);
+			return { index: selectedIndex, text: lines[selectedIndex].trim() };
+		} else {
+			let nextIndex = 0;
+			if (sentIndexes.length > 0) {
+				nextIndex = (sentIndexes[sentIndexes.length - 1] + 1) % lines.length;
+			}
+			sentIndexes.push(nextIndex);
+			return { index: nextIndex, text: lines[nextIndex].trim() };
+		}
+	}
+
+	// 等待页面加载后查找输入框（消除重复的 waitForPageLoad+tryFindChatInput 链）
+	function waitForPageAndInput() {
+		waitForPageLoad().then(() => {
+			addHistoryLog('页面加载完成，开始查找聊天输入框', 'info');
+			tryFindChatInput();
+		}).catch(error => {
+			addHistoryLog(`等待页面加载超时: ${error.message}`, 'error');
+			tryFindChatInput();
+		});
+	}
+
+	// 重置所有 GM 存储值为默认
+	function resetAllGMValues() {
+		GM_setValue('lastSentDate', '');
+		GM_setValue('userConfig', '');
+		GM_setValue('txtApiManualSentIndexes', []);
+		GM_setValue('historyLogs', []);
+		GM_setValue('sentUsersToday', []);
+		GM_setValue('currentUserIndex', -1);
+		GM_setValue('lastTargetUser', '');
+		GM_setValue('lastResetDate', '');
+		GM_setValue('fireDays', 1);
+		GM_setValue('lastFireDate', new Date().toISOString().split('T')[0]);
+		GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
+		GM_setValue('retryCount', 0);
+		GM_setValue('isMaxRetryReached', false);
+		GM_setValue('lastRetryResetTime', 0);
+	}
+
+	// ==================== API拦截：捕获完整的用户列表 ====================
+
+	function processUserApiResponse(userList) {
+		if (!Array.isArray(userList)) return;
+		let newCount = 0;
+		userList.forEach(item => {
+			if (item.user_id && item.user && item.user.nickname) {
+				if (!userApiMap[item.user_id]) newCount++;
+				userApiMap[item.user_id] = {
+					user_id: item.user_id,
+					nickname: item.user.nickname
+				};
+			}
+		});
+		if (newCount > 0) {
+			addHistoryLog(`从API获取到用户数据共 ${Object.keys(userApiMap).length} 人`, 'success');
+		}
+		detectAndUpdateRenamedUsers();
+	}
+
+	// 检测好友改名并自动更新 targetUsernames 和 nicknameUserIdMap
+	function detectAndUpdateRenamedUsers() {
+		if (!userConfig.targetUsernames) return;
+		const nicknameUserIdMap = GM_getValue('nicknameUserIdMap', {});
+		let updated = false;
+		const newLines = userConfig.targetUsernames.split('\n').map(line => {
+			const nickname = line.trim();
+			if (!nickname) return line;
+			const userId = nicknameUserIdMap[nickname];
+			if (!userId) return line; // 手动输入且无 user_id 关联，跳过
+			const apiEntry = userApiMap[userId];
+			if (apiEntry && apiEntry.nickname !== nickname) {
+				const newNickname = apiEntry.nickname;
+				addHistoryLog(`检测到用户改名: "${nickname}" → "${newNickname}"，已自动更新`, 'success');
+				delete nicknameUserIdMap[nickname];
+				nicknameUserIdMap[newNickname] = userId;
+				updated = true;
+				return newNickname;
+			}
+			return line;
+		});
+		if (updated) {
+			userConfig.targetUsernames = newLines.join('\n');
+			GM_setValue('nicknameUserIdMap', nicknameUserIdMap);
+			saveConfig();
+			parseTargetUsers();
+			updateUserStatusDisplay();
+		}
+	}
+
+	function interceptUserDetailApi() {
+		const TARGET_URL = '/aweme/v1/creator/im/user_detail/';
+
+		const origOpen = XMLHttpRequest.prototype.open;
+		const origSend = XMLHttpRequest.prototype.send;
+		XMLHttpRequest.prototype.open = function(method, url) {
+			this._interceptUrl = url;
+			return origOpen.apply(this, arguments);
+		};
+		XMLHttpRequest.prototype.send = function() {
+			if (this._interceptUrl && this._interceptUrl.includes(TARGET_URL)) {
+				this.addEventListener('load', function() {
+					try {
+						const data = JSON.parse(this.responseText);
+						if (data && data.user_list) processUserApiResponse(data.user_list);
+					} catch (e) {}
+				});
+			}
+			return origSend.apply(this, arguments);
+		};
+
+		const origFetch = window.fetch;
+		window.fetch = function(input, init) {
+			const url = typeof input === 'string' ? input : (input && input.url) || '';
+			const result = origFetch.apply(this, arguments);
+			if (url.includes(TARGET_URL)) {
+				result.then(response => {
+					response.clone().json().then(data => {
+						if (data && data.user_list) processUserApiResponse(data.user_list);
+					}).catch(() => {});
+				}).catch(() => {});
+			}
+			return result;
+		};
+	}
+
+	function getNicknameByUserId(userId) {
+		return userApiMap[userId] ? userApiMap[userId].nickname : userId;
+	}
+
+	// 通过昵称反查 user_id（用于将 DOM 昵称与 API 数据关联）
+	function getUserIdByNickname(nickname) {
+		for (const info of Object.values(userApiMap)) {
+			if (info.nickname === nickname) return info.user_id;
+		}
+		return null;
+	}
+
+	// ==================== 确保“全部”标签页激活 ====================
 	function ensureAllTabActive() {
 		return new Promise((resolve) => {
 			// 可能的选择器（优先新UI，兼容旧UI）
@@ -154,7 +356,7 @@
 			if (chatContainer) {
 				const observer = new MutationObserver((mutations, obs) => {
 					setTimeout(() => {
-						const userElements = document.querySelectorAll('.item-header-name-vL_79m');
+						const userElements = document.querySelectorAll('[class*="item-header-name-"]');
 						if (userElements.length > 0) {
 							obs.disconnect();
 							resolve();
@@ -190,12 +392,6 @@
 		} : {
 			...DEFAULT_CONFIG
 		};
-
-		for (const key in DEFAULT_CONFIG) {
-			if (userConfig[key] === undefined) {
-				userConfig[key] = DEFAULT_CONFIG[key];
-			}
-		}
 
 		if (!GM_getValue('txtApiManualSentIndexes')) {
 			GM_setValue('txtApiManualSentIndexes', []);
@@ -440,29 +636,17 @@
 
 	// 更新一言状态显示
 	function updateHitokotoStatus(status, isSuccess = true) {
-		const statusEl = document.getElementById('dy-fire-hitokoto');
-		if (statusEl) {
-			statusEl.textContent = status;
-			statusEl.style.color = isSuccess ? '#00d8b8' : '#ff2c54';
-		}
+		updateElementStatus('dy-fire-hitokoto', status, isSuccess);
 	}
 
 	// 更新TXTAPI状态显示
 	function updateTxtApiStatus(status, isSuccess = true) {
-		const statusEl = document.getElementById('dy-fire-txtapi');
-		if (statusEl) {
-			statusEl.textContent = status;
-			statusEl.style.color = isSuccess ? '#00d8b8' : '#ff2c54';
-		}
+		updateElementStatus('dy-fire-txtapi', status, isSuccess);
 	}
 
 	// 更新专属一言状态显示
 	function updateSpecialHitokotoStatus(status, isSuccess = true) {
-		const statusEl = document.getElementById('dy-fire-special-hitokoto');
-		if (statusEl) {
-			statusEl.textContent = status;
-			statusEl.style.color = isSuccess ? '#00d8b8' : '#ff2c54';
-		}
+		updateElementStatus('dy-fire-special-hitokoto', status, isSuccess);
 	}
 
 	// 更新火花天数显示
@@ -576,7 +760,7 @@
 			}
 		}
 
-		const sampleUser = document.querySelector('.item-header-name-vL_79m');
+		const sampleUser = document.querySelector('[class*="item-header-name-"]');
 		if (sampleUser) {
 			let parent = sampleUser;
 			for (let i = 0; i < 10; i++) {
@@ -617,11 +801,6 @@
 		if (searchDebounceTimer) {
 			clearTimeout(searchDebounceTimer);
 			searchDebounceTimer = null;
-		}
-
-		if (searchTimeout) {
-			clearTimeout(searchTimeout);
-			searchTimeout = null;
 		}
 
 		if (!skipLog && reason !== '观察器初始化') {
@@ -669,6 +848,168 @@
 		GM_setValue('searchAttemptCount', 0);
 	}
 
+	// 点击已找到的目标用户元素（提取的公共逻辑）
+	function clickFoundUser(targetElement, username) {
+		addHistoryLog(`找到目标用户: ${username}`, 'success');
+		updateUserStatus(`已找到: ${username}`, true);
+
+		let clickSuccess = false;
+
+		if (userConfig.clickMethod === 'direct') {
+			try {
+				targetElement.click();
+				addHistoryLog('使用直接点击方法成功', 'success');
+				clickSuccess = true;
+			} catch (error) {
+				addHistoryLog(`直接点击失败: ${error.message}`, 'error');
+			}
+		} else {
+			try {
+				const clickEvent = createSafeMouseEvent('click');
+				if (clickEvent) {
+					targetElement.dispatchEvent(clickEvent);
+					addHistoryLog('使用事件触发方法成功', 'success');
+					clickSuccess = true;
+				} else {
+					targetElement.click();
+					addHistoryLog('事件创建失败，使用直接点击成功', 'success');
+					clickSuccess = true;
+				}
+			} catch (error) {
+				addHistoryLog(`事件触发失败: ${error.message}`, 'error');
+			}
+		}
+
+		if (clickSuccess) {
+			currentState = 'found';
+			stopChatObserver('成功找到目标用户');
+			if (searchTimeoutId) {
+				clearTimeout(searchTimeoutId);
+				searchTimeoutId = null;
+			}
+			waitForPageAndInput();
+			return true;
+		}
+
+		// 回退：尝试点击父元素
+		try {
+			let clickableParent = targetElement;
+			for (let i = 0; i < 5; i++) {
+				clickableParent = clickableParent.parentElement;
+				if (!clickableParent) break;
+
+				const style = window.getComputedStyle(clickableParent);
+				if (style.cursor === 'pointer' || clickableParent.onclick) {
+					clickableParent.click();
+					addHistoryLog('通过父元素点击成功', 'success');
+					currentState = 'found';
+					stopChatObserver('通过父元素点击成功');
+					if (searchTimeoutId) {
+						clearTimeout(searchTimeoutId);
+						searchTimeoutId = null;
+					}
+					waitForPageAndInput();
+					return true;
+				}
+			}
+		} catch (error) {
+			addHistoryLog(`父元素点击也失败: ${error.message}`, 'error');
+		}
+
+		updateUserStatus('点击失败', false);
+		return false;
+	}
+
+	// 滚动聊天列表查找目标用户（解决虚拟列表中用户不在可视区域的问题）
+	function scrollToFindAndClickUser(targetUser) {
+		const myGeneration = ++scrollSearchGeneration;
+		isScrollSearching = true;
+
+		// 滚动期间停止观察器避免干扰
+		stopChatObserver('开始滚动查找', true);
+
+		const ITEM_SEL = '[class*="item-header-name-"]';
+		const NO_MORE_SEL = '[class*="no-more-tip-"]';
+
+		// 查找可滚动的聊天列表容器
+		let container = null;
+		const sampleEl = document.querySelector(ITEM_SEL);
+		if (sampleEl) {
+			let el = sampleEl.parentElement;
+			while (el && el !== document.body) {
+				const s = window.getComputedStyle(el);
+				if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 10) {
+					container = el;
+					break;
+				}
+				el = el.parentElement;
+			}
+		}
+
+		if (!container) {
+			addHistoryLog('未找到可滚动容器，无法滚动查找', 'warn');
+			isScrollSearching = false;
+			return;
+		}
+
+		const origScrollTop = container.scrollTop;
+		let lastScrollTop = -1;
+		let stuckCount = 0;
+
+		addHistoryLog(`开始滚动查找用户: ${targetUser}`, 'info');
+
+		const checkForUser = () => {
+			const userElements = document.querySelectorAll(ITEM_SEL);
+			for (let el of userElements) {
+				if (el.textContent.trim() === targetUser) {
+					return el;
+				}
+			}
+			return null;
+		};
+
+		const step = () => {
+			// 如果被新的滚动查找取代，或状态已不再是searching，则中止
+			if (myGeneration !== scrollSearchGeneration || currentState !== 'searching') {
+				container.scrollTop = origScrollTop;
+				isScrollSearching = false;
+				return;
+			}
+
+			const foundEl = checkForUser();
+			if (foundEl) {
+				isScrollSearching = false;
+				clickFoundUser(foundEl, targetUser);
+				return;
+			}
+
+			// 到底了仍未找到
+			if (document.querySelector(NO_MORE_SEL)) {
+				addHistoryLog(`滚动到底部未找到用户: ${targetUser}`, 'warn');
+				container.scrollTop = origScrollTop;
+				isScrollSearching = false;
+				return;
+			}
+
+			container.scrollTop += 500;
+
+			if (container.scrollTop === lastScrollTop) {
+				if (++stuckCount >= 4) {
+					addHistoryLog(`滚动查找结束，未找到用户: ${targetUser}`, 'warn');
+					container.scrollTop = origScrollTop;
+					isScrollSearching = false;
+					return;
+				}
+			} else {
+				stuckCount = 0;
+			}
+			lastScrollTop = container.scrollTop;
+			setTimeout(step, 350);
+		};
+
+		setTimeout(step, 100);
+	}
+
 	// 查找并点击目标用户
 	function findAndClickTargetUser() {
 		if (!userConfig.enableTargetUser || allTargetUsers.length === 0) {
@@ -714,7 +1055,7 @@
 		addHistoryLog(`查找目标用户: ${currentTargetUser}`, 'info');
 		updateUserStatus(`寻找: ${currentTargetUser}`, null);
 
-		const userElements = document.querySelectorAll('.item-header-name-vL_79m');
+		const userElements = document.querySelectorAll('[class*="item-header-name-"]');
 		let targetElement = null;
 
 		for (let element of userElements) {
@@ -725,82 +1066,13 @@
 		}
 
 		if (targetElement) {
-			addHistoryLog(`找到目标用户: ${currentTargetUser}`, 'success');
-			updateUserStatus(`已找到: ${currentTargetUser}`, true);
-
-			stopChatObserver();
-
-			let clickSuccess = false;
-
-			if (userConfig.clickMethod === 'direct') {
-				try {
-					targetElement.click();
-					addHistoryLog('使用直接点击方法成功', 'success');
-					clickSuccess = true;
-				} catch (error) {
-					addHistoryLog(`直接点击失败: ${error.message}`, 'error');
-				}
-			} else {
-				try {
-					const clickEvent = createSafeMouseEvent('click');
-					if (clickEvent) {
-						targetElement.dispatchEvent(clickEvent);
-						addHistoryLog('使用事件触发方法成功', 'success');
-						clickSuccess = true;
-					} else {
-						targetElement.click();
-						addHistoryLog('事件创建失败，使用直接点击成功', 'success');
-						clickSuccess = true;
-					}
-				} catch (error) {
-					addHistoryLog(`事件触发失败: ${error.message}`, 'error');
-				}
-			}
-
-			if (clickSuccess) {
-				currentState = 'found';
-				stopChatObserver('成功找到目标用户');
-
-				waitForPageLoad().then(() => {
-					addHistoryLog('页面加载完成，开始查找聊天输入框', 'info');
-					tryFindChatInput();
-				}).catch(error => {
-					addHistoryLog(`等待页面加载超时: ${error.message}`, 'error');
-					tryFindChatInput();
-				});
-				return true;
-			} else {
-				try {
-					let clickableParent = targetElement;
-					for (let i = 0; i < 5; i++) {
-						clickableParent = clickableParent.parentElement;
-						if (!clickableParent) break;
-
-						const style = window.getComputedStyle(clickableParent);
-						if (style.cursor === 'pointer' || clickableParent.onclick) {
-							clickableParent.click();
-							addHistoryLog('通过父元素点击成功', 'success');
-							currentState = 'found';
-							waitForPageLoad().then(() => {
-								addHistoryLog('页面加载完成，开始查找聊天输入框', 'info');
-								tryFindChatInput();
-							}).catch(error => {
-								addHistoryLog(`等待页面加载超时: ${error.message}`, 'error');
-								tryFindChatInput();
-							});
-							return true;
-						}
-					}
-				} catch (error) {
-					addHistoryLog(`父元素点击也失败: ${error.message}`, 'error');
-				}
-
-				updateUserStatus('点击失败', false);
-				return false;
-			}
+			return clickFoundUser(targetElement, currentTargetUser);
 		} else {
-			addHistoryLog(`未找到目标用户: ${currentTargetUser}`, 'warn');
-			updateUserStatus(`寻找: ${currentTargetUser}`, null);
+			// 用户不在当前可视DOM中，启动滚动查找（仅在任务执行中且未在滚动时）
+			if (!isScrollSearching) {
+				addHistoryLog(`用户 ${currentTargetUser} 不在可视区域，启动滚动查找`, 'info');
+				scrollToFindAndClickUser(currentTargetUser);
+			}
 			return false;
 		}
 	}
@@ -837,7 +1109,7 @@
 			const checkInterval = setInterval(() => {
 				checkCount++;
 
-				const chatInput = document.querySelector('.chat-input-dccKiL');
+				const chatInput = document.querySelector('[class*="chat-input-"]');
 				if (chatInput) {
 					settle(resolve);
 					return;
@@ -946,6 +1218,11 @@
 					addHistoryLog('用户查找超时', 'error');
 					updateUserStatus('查找超时', false);
 					stopChatObserver('用户查找超时');
+					// 中止正在进行的滚动查找
+					if (isScrollSearching) {
+						scrollSearchGeneration++;
+						isScrollSearching = false;
+					}
 					setTimeout(executeSendProcess, 2000);
 				}
 			}, userConfig.userSearchTimeout);
@@ -1018,7 +1295,7 @@
 			clearTimeout(chatInputCheckTimer);
 		}
 
-		const input = document.querySelector('.chat-input-dccKiL');
+		const input = document.querySelector('[class*="chat-input-"]');
 		if (input) {
 			chatInputNotFoundCount = 0;
 			addHistoryLog('找到聊天输入框', 'info');
@@ -1034,18 +1311,15 @@
 
 			currentState = 'sending';
 			input.textContent = '';
-			input.focus();
-
-			const lines = messageToSend.split('\n');
-			for (let i = 0; i < lines.length; i++) {
-				document.execCommand('insertText', false, lines[i]);
-				if (i < lines.length - 1) {
-					document.execCommand('insertLineBreak');
-				}
-			}
-
-			input.dispatchEvent(new Event('input', {
-				bubbles: true
+			input.innerHTML = messageToSend.split('\n').map(line => {
+				const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+				return escaped || '<br>';
+			}).join('<br>');
+			input.dispatchEvent(new InputEvent('input', {
+				bubbles: true,
+				cancelable: true,
+				inputType: 'insertText',
+				data: messageToSend
 			}));
 
 			setTimeout(() => {
@@ -1260,70 +1534,33 @@
 
 	// 获取专属一言内容
 	function getSpecialHitokoto() {
-		return new Promise((resolve, reject) => {
-			try {
-				const now = new Date();
-				const dayOfWeek = now.getDay();
-				const dayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-				const currentDayKey = dayKeys[dayOfWeek];
-				const dayName = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][dayOfWeek];
+		try {
+			const now = new Date();
+			const dayOfWeek = now.getDay();
+			const dayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+			const currentDayKey = dayKeys[dayOfWeek];
+			const dayName = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][dayOfWeek];
 
-				const text = userConfig[`specialHitokoto${currentDayKey.charAt(0).toUpperCase() + currentDayKey.slice(1)}`] || '';
-				const lines = text.split('\n').filter(line => line.trim());
+			const text = userConfig[`specialHitokoto${currentDayKey.charAt(0).toUpperCase() + currentDayKey.slice(1)}`] || '';
+			const lines = text.split('\n').filter(line => line.trim());
 
-				if (lines.length === 0) {
-					updateSpecialHitokotoStatus(`${dayName}无内容`, false);
-					resolve(`${dayName}暂无专属一言`);
-					return;
-				}
-
-				const sentIndexes = specialHitokotoSentIndexes[currentDayKey] || [];
-
-				let selectedIndex;
-				let selectedText;
-
-				if (userConfig.specialHitokotoRandom) {
-					let availableIndexes = [];
-					for (let i = 0; i < lines.length; i++) {
-						if (!sentIndexes.includes(i)) {
-							availableIndexes.push(i);
-						}
-					}
-
-					if (availableIndexes.length === 0) {
-						specialHitokotoSentIndexes[currentDayKey] = [];
-						sentIndexes.length = 0;
-						availableIndexes = Array.from({
-							length: lines.length
-						}, (_, i) => i);
-					}
-
-					const randomIndex = Math.floor(Math.random() * availableIndexes.length);
-					selectedIndex = availableIndexes[randomIndex];
-					selectedText = lines[selectedIndex].trim();
-
-					specialHitokotoSentIndexes[currentDayKey].push(selectedIndex);
-					GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
-				} else {
-					let nextIndex = 0;
-					if (sentIndexes.length > 0) {
-						nextIndex = (sentIndexes[sentIndexes.length - 1] + 1) % lines.length;
-					}
-
-					selectedIndex = nextIndex;
-					selectedText = lines[selectedIndex].trim();
-
-					specialHitokotoSentIndexes[currentDayKey].push(selectedIndex);
-					GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
-				}
-
-				updateSpecialHitokotoStatus(`${dayName}获取成功`);
-				resolve(`${dayName}专属: ${selectedText}`);
-			} catch (error) {
-				updateSpecialHitokotoStatus('获取失败', false);
-				reject(new Error(`专属一言获取失败: ${error.message}`));
+			if (lines.length === 0) {
+				updateSpecialHitokotoStatus(`${dayName}无内容`, false);
+				return Promise.resolve(`${dayName}暂无专属一言`);
 			}
-		});
+
+			if (!specialHitokotoSentIndexes[currentDayKey]) {
+				specialHitokotoSentIndexes[currentDayKey] = [];
+			}
+			const picked = pickFromTextList(lines, specialHitokotoSentIndexes[currentDayKey], userConfig.specialHitokotoRandom);
+			GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
+
+			updateSpecialHitokotoStatus(`${dayName}获取成功`);
+			return Promise.resolve(`${dayName}专属: ${picked.text}`);
+		} catch (error) {
+			updateSpecialHitokotoStatus('获取失败', false);
+			return Promise.reject(new Error(`专属一言获取失败: ${error.message}`));
+		}
 	}
 
 	// 获取TXTAPI内容
@@ -1373,46 +1610,11 @@
 					}
 
 					let sentIndexes = GM_getValue('txtApiManualSentIndexes', []);
+					const picked = pickFromTextList(lines, sentIndexes, userConfig.txtApiManualRandom);
+					GM_setValue('txtApiManualSentIndexes', sentIndexes);
 
-					if (userConfig.txtApiManualRandom) {
-						let availableIndexes = [];
-						for (let i = 0; i < lines.length; i++) {
-							if (!sentIndexes.includes(i)) {
-								availableIndexes.push(i);
-							}
-						}
-
-						if (availableIndexes.length === 0) {
-							sentIndexes = [];
-							availableIndexes = Array.from({
-								length: lines.length
-							}, (_, i) => i);
-							GM_setValue('txtApiManualSentIndexes', []);
-						}
-
-						const randomIndex = Math.floor(Math.random() * availableIndexes.length);
-						const selectedIndex = availableIndexes[randomIndex];
-						const selectedText = lines[selectedIndex].trim();
-
-						sentIndexes.push(selectedIndex);
-						GM_setValue('txtApiManualSentIndexes', sentIndexes);
-
-						updateTxtApiStatus('获取成功');
-						resolve(selectedText);
-					} else {
-						let nextIndex = 0;
-						if (sentIndexes.length > 0) {
-							nextIndex = (sentIndexes[sentIndexes.length - 1] + 1) % lines.length;
-						}
-
-						const selectedText = lines[nextIndex].trim();
-
-						sentIndexes.push(nextIndex);
-						GM_setValue('txtApiManualSentIndexes', sentIndexes);
-
-						updateTxtApiStatus('获取成功');
-						resolve(selectedText);
-					}
+					updateTxtApiStatus('获取成功');
+					resolve(picked.text);
 				} catch (e) {
 					updateTxtApiStatus('解析失败', false);
 					reject(new Error('手动文本解析失败'));
@@ -1540,82 +1742,36 @@
 			return;
 		}
 
-		const now = new Date();
 		const today = new Date().toDateString();
 
 		if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
-			const shouldResetForNewDay = checkIfShouldResetForNewDay();
-
-			if (shouldResetForNewDay) {
+			if (checkIfShouldResetForNewDay()) {
 				addHistoryLog('新的一天开始，重置今日发送记录', 'info');
 				resetTodaySentUsers();
 			}
 
 			const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
-			if (unsentUsers.length > 0 && !isProcessing) {
-				let targetTimeToday;
-				if (userConfig.sendTimeRandom) {
-					const [startHour, startMinute] = userConfig.sendTimeRangeStart.split(':').map(Number);
-					const [endHour, endMinute] = userConfig.sendTimeRangeEnd.split(':').map(Number);
-
-					const nowMinutes = now.getHours() * 60 + now.getMinutes();
-					const startMinutes = startHour * 60 + startMinute;
-					const endMinutes = endHour * 60 + endMinute;
-
-					let isInRange = false;
-					if (endMinutes > startMinutes) {
-						isInRange = nowMinutes >= startMinutes && nowMinutes <= endMinutes;
-					} else {
-						isInRange = nowMinutes >= startMinutes || nowMinutes <= endMinutes;
-					}
-
-					if (isInRange) {
-						addHistoryLog(`检测到有${unsentUsers.length}个用户未发送且在随机时间范围内(${userConfig.sendTimeRangeStart}-${userConfig.sendTimeRangeEnd})，自动发送`, 'info');
-						sendMessage();
-					}
-				} else {
-					const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
-					const targetTimeToday = new Date();
-					targetTimeToday.setHours(targetHour, targetMinute, targetSecond || 0, 0);
-
-					if (now >= targetTimeToday) {
-						addHistoryLog(`检测到有${unsentUsers.length}个用户未发送且已过${userConfig.sendTime}，自动发送`, 'info');
-						sendMessage();
-					}
+			if (unsentUsers.length > 0) {
+				const shouldSend = userConfig.sendTimeRandom ? isCurrentTimeInRange() : isAtOrPastSendTime();
+				if (shouldSend) {
+					const reason = userConfig.sendTimeRandom
+						? `检测到有${unsentUsers.length}个用户未发送且在随机时间范围内(${userConfig.sendTimeRangeStart}-${userConfig.sendTimeRangeEnd})，自动发送`
+						: `检测到有${unsentUsers.length}个用户未发送且已过${userConfig.sendTime}，自动发送`;
+					addHistoryLog(reason, 'info');
+					sendMessage();
 				}
 			}
 		} else {
 			const lastSentDate = GM_getValue('lastSentDate', '');
 
 			if (lastSentDate !== today) {
-				if (userConfig.sendTimeRandom) {
-					const [startHour, startMinute] = userConfig.sendTimeRangeStart.split(':').map(Number);
-					const [endHour, endMinute] = userConfig.sendTimeRangeEnd.split(':').map(Number);
-
-					const nowMinutes = now.getHours() * 60 + now.getMinutes();
-					const startMinutes = startHour * 60 + startMinute;
-					const endMinutes = endHour * 60 + endMinute;
-
-					let isInRange = false;
-					if (endMinutes > startMinutes) {
-						isInRange = nowMinutes >= startMinutes && nowMinutes <= endMinutes;
-					} else {
-						isInRange = nowMinutes >= startMinutes || nowMinutes <= endMinutes;
-					}
-
-					if (isInRange && !isProcessing) {
-						addHistoryLog(`检测到今日未发送且在随机时间范围内(${userConfig.sendTimeRangeStart}-${userConfig.sendTimeRangeEnd})，自动发送`, 'info');
-						sendMessage();
-					}
-				} else {
-					const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
-					const targetTimeToday = new Date();
-					targetTimeToday.setHours(targetHour, targetMinute, targetSecond || 0, 0);
-
-					if (now >= targetTimeToday && !isProcessing) {
-						addHistoryLog(`检测到今日未发送且已过${userConfig.sendTime}，自动发送`, 'info');
-						sendMessage();
-					}
+				const shouldSend = userConfig.sendTimeRandom ? isCurrentTimeInRange() : isAtOrPastSendTime();
+				if (shouldSend) {
+					const reason = userConfig.sendTimeRandom
+						? `检测到今日未发送且在随机时间范围内(${userConfig.sendTimeRangeStart}-${userConfig.sendTimeRangeEnd})，自动发送`
+						: `检测到今日未发送且已过${userConfig.sendTime}，自动发送`;
+					addHistoryLog(reason, 'info');
+					sendMessage();
 				}
 			}
 		}
@@ -1759,36 +1915,10 @@
 					GM_deleteValue(key);
 				});
 			} catch (e) {
-				GM_setValue('lastSentDate', '');
-				GM_setValue('userConfig', '');
-				GM_setValue('txtApiManualSentIndexes', []);
-				GM_setValue('historyLogs', []);
-				GM_setValue('sentUsersToday', []);
-				GM_setValue('currentUserIndex', -1);
-				GM_setValue('lastTargetUser', '');
-				GM_setValue('lastResetDate', '');
-				GM_setValue('fireDays', 1);
-				GM_setValue('lastFireDate', new Date().toISOString().split('T')[0]);
-				GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
-				GM_setValue('retryCount', 0);
-				GM_setValue('isMaxRetryReached', false);
-				GM_setValue('lastRetryResetTime', 0);
+				resetAllGMValues();
 			}
 		} else {
-			GM_setValue('lastSentDate', '');
-			GM_setValue('userConfig', '');
-			GM_setValue('txtApiManualSentIndexes', []);
-			GM_setValue('historyLogs', []);
-			GM_setValue('sentUsersToday', []);
-			GM_setValue('currentUserIndex', -1);
-			GM_setValue('lastTargetUser', '');
-			GM_setValue('lastResetDate', '');
-			GM_setValue('fireDays', 1);
-			GM_setValue('lastFireDate', new Date().toISOString().split('T')[0]);
-			GM_setValue('specialHitokotoSentIndexes', specialHitokotoSentIndexes);
-			GM_setValue('retryCount', 0);
-			GM_setValue('isMaxRetryReached', false);
-			GM_setValue('lastRetryResetTime', 0);
+			resetAllGMValues();
 		}
 
 		initConfig();
@@ -1899,19 +2029,89 @@
 		}
 	}
 
-	// 解析当前聊天列表的用户
-	function parseCurrentChatUsers() {
-		const userElements = document.querySelectorAll('.item-header-name-vL_79m');
-		const users = [];
+	// 自动滚动聊天列表，每发现新条目立即回调（增量），直到出现「没有更多了~」
+	// onNewItems(newNicknames[]) — 每轮新发现的昵称数组
+	// onDone() — 滚动结束
+	function autoScrollChatListAndCollect(panelEl, onNewItems, onDone) {
+		const ITEM_SEL = '[class*="item-header-name-"]';
+		const NO_MORE_SEL = '[class*="no-more-tip-"]';
+		const seen = new Set();
 
-		userElements.forEach(element => {
-			const username = element.textContent.trim();
-			if (username && !users.includes(username)) {
-				users.push(username);
+		// 扫描当前 DOM，返回本次新增的昵称数组
+		const scanNew = () => {
+			const fresh = [];
+			document.querySelectorAll(ITEM_SEL).forEach(el => {
+				const text = el.textContent.trim();
+				if (text && !seen.has(text)) {
+					seen.add(text);
+					fresh.push(text);
+				}
+			});
+			return fresh;
+		};
+
+		// 向上遍历 DOM 寻找可滚动的聊天列表容器
+		let container = null;
+		const sampleEl = document.querySelector(ITEM_SEL);
+		if (sampleEl) {
+			let el = sampleEl.parentElement;
+			while (el && el !== document.body) {
+				const s = window.getComputedStyle(el);
+				if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 10) {
+					container = el;
+					break;
+				}
+				el = el.parentElement;
 			}
-		});
+		}
 
-		return users;
+		// 先扫描当前可见条目
+		const initial = scanNew();
+		if (initial.length) onNewItems(initial);
+
+		if (!container) {
+			onDone();
+			return;
+		}
+
+		const origScrollTop = container.scrollTop;
+		let lastScrollTop = -1;
+		let stuckCount = 0;
+
+		const step = () => {
+			if (!document.body.contains(panelEl)) {
+				container.scrollTop = origScrollTop;
+				return;
+			}
+
+			const fresh = scanNew();
+			if (fresh.length) onNewItems(fresh);
+
+			if (document.querySelector(NO_MORE_SEL)) {
+				// 到底了，再扫一次确保最后一屏也被收集
+				const last = scanNew();
+				if (last.length) onNewItems(last);
+				container.scrollTop = origScrollTop;
+				onDone();
+				return;
+			}
+
+			container.scrollTop += 500;
+
+			if (container.scrollTop === lastScrollTop) {
+				if (++stuckCount >= 4) {
+					container.scrollTop = origScrollTop;
+					onDone();
+					return;
+				}
+			} else {
+				stuckCount = 0;
+			}
+			lastScrollTop = container.scrollTop;
+			setTimeout(step, 350);
+		};
+
+		setTimeout(step, 100);
 	}
 
 	// 显示用户选择面板
@@ -1922,20 +2122,27 @@
 			return;
 		}
 
-		const currentUsers = parseCurrentChatUsers();
-
-		if (currentUsers.length === 0) {
-			addHistoryLog('未找到聊天列表中的用户', 'warn');
-			return;
-		}
-
 		let currentTargetUsers = [];
 		if (userConfig.targetUsernames && userConfig.targetUsernames.trim()) {
 			currentTargetUsers = userConfig.targetUsernames.split('\n')
-				.map(user => user.trim())
-				.filter(user => user.length > 0);
+				.map(u => u.trim())
+				.filter(u => u.length > 0);
 		}
 
+		const escapeHtml = str => {
+			const div = document.createElement('div');
+			div.appendChild(document.createTextNode(str));
+			return div.innerHTML;
+		};
+
+		// 构建昵称->user_id 反查表（来自 API 拦截数据）
+		const nicknameToUserId = () => {
+			const map = {};
+			Object.values(userApiMap).forEach(info => { map[info.nickname] = info.user_id; });
+			return map;
+		};
+
+		// 立即构建完整面板结构（含列表容器和底部按钮）
 		const userSelectPanel = document.createElement('div');
 		userSelectPanel.id = 'dy-fire-user-select-panel';
 		userSelectPanel.style.cssText = `
@@ -1956,136 +2163,118 @@
             box-sizing: border-box;
             backdrop-filter: blur(10px);
             border: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            flex-direction: column;
         `;
-
-		const escapeHtml = (str) => {
-			const div = document.createElement('div');
-			div.appendChild(document.createTextNode(str));
-			return div.innerHTML;
-		};
-		const userCheckboxes = currentUsers.map(user => {
-			const isChecked = currentTargetUsers.includes(user);
-			const safeUser = escapeHtml(user);
-			return `
-            <div style="padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05);">
-                <label style="display: flex; align-items: center; cursor: pointer;">
-                    <input type="checkbox" class="user-checkbox" value="${safeUser}" ${isChecked ? 'checked' : ''} style="margin-right: 10px;">
-                    <span style="color: #fff; font-size: 14px;">${safeUser}</span>
-                </label>
-            </div>
-        `
-		}).join('');
-
 		userSelectPanel.innerHTML = `
-            <div id="dy-fire-user-select-header" style="padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); cursor: move;">
+            <div id="dy-fire-user-select-header" style="padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); cursor: move; flex-shrink: 0;">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <h3 style="margin: 0; color: #fff; font-size: 18px; font-weight: 600;">
-                        👥 选择用户 (${currentUsers.length})
-                    </h3>
+                    <h3 id="dy-fire-user-select-title" style="margin: 0; color: #fff; font-size: 18px; font-weight: 600;">👥 选择用户 <span id="dy-fire-user-select-count" style="color:#00d8b8;">(加载中…)</span></h3>
                     <button id="dy-fire-user-select-close" style="background: rgba(255,255,255,0.1); border: none; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; color: #fff; font-size: 18px; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;">×</button>
                 </div>
             </div>
-            
-            <div style="padding: 15px 20px; border-bottom: 1px solid rgba(255,255,255,0.1);">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
-                    <button id="dy-fire-select-all" style="padding: 8px 16px; background: rgba(0, 216, 184, 0.2); color: #00d8b8; border: 1px solid rgba(0, 216, 184, 0.3); border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s ease;">
-                        全选
-                    </button>
-                    <button id="dy-fire-deselect-all" style="padding: 8px 16px; background: rgba(255, 44, 84, 0.2); color: #ff2c54; border: 1px solid rgba(255, 44, 84, 0.3); border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s ease;">
-                        取消全选
-                    </button>
-                </div>
-                
-                <div style="height: 300px; overflow-y: auto; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 10px;">
-                    ${userCheckboxes}
-                </div>
+
+            <div style="padding: 12px 20px; border-bottom: 1px solid rgba(255,255,255,0.1); flex-shrink: 0; display: flex; justify-content: space-between;">
+                <button id="dy-fire-select-all" style="padding: 8px 16px; background: rgba(0,216,184,0.2); color: #00d8b8; border: 1px solid rgba(0,216,184,0.3); border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s ease;">全选</button>
+                <span id="dy-fire-user-select-loading-badge" style="font-size: 12px; color: #ff2c54; align-self: center;">⏳ 滚动加载中…</span>
+                <button id="dy-fire-deselect-all" style="padding: 8px 16px; background: rgba(255,44,84,0.2); color: #ff2c54; border: 1px solid rgba(255,44,84,0.3); border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s ease;">取消全选</button>
             </div>
-            
-            <div style="padding: 20px; border-top: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2);">
+
+            <div id="dy-fire-user-list-container" style="flex: 1; overflow-y: auto; background: rgba(0,0,0,0.2); margin: 10px 20px; border-radius: 8px; padding: 6px; min-height: 200px; max-height: 320px;"></div>
+
+            <div style="padding: 16px 20px; border-top: 1px solid rgba(255,255,255,0.1); background: rgba(0,0,0,0.2); flex-shrink: 0;">
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                    <button id="dy-fire-user-select-add" style="padding: 12px; background: linear-gradient(135deg, #00d8b8 0%, #00b8a8 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s ease;">
-                        ✅ 更新目标用户
-                    </button>
-                    <button id="dy-fire-user-select-cancel" style="padding: 12px; background: linear-gradient(135deg, #ff2c54 0%, #ff6b8b 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s ease;">
-                        ❌ 取消
-                    </button>
+                    <button id="dy-fire-user-select-add" style="padding: 12px; background: linear-gradient(135deg, #00d8b8 0%, #00b8a8 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s ease;">✅ 更新目标用户</button>
+                    <button id="dy-fire-user-select-cancel" style="padding: 12px; background: linear-gradient(135deg, #ff2c54 0%, #ff6b8b 100%); color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 14px; transition: all 0.2s ease;">❌ 取消</button>
                 </div>
             </div>
         `;
-
 		document.body.appendChild(userSelectPanel);
-
 		addDragFunctionality(userSelectPanel, 'dy-fire-user-select-header');
 
-		const selectAllBtn = document.getElementById('dy-fire-select-all');
-		const deselectAllBtn = document.getElementById('dy-fire-deselect-all');
-		const addBtn = document.getElementById('dy-fire-user-select-add');
+		const countEl   = document.getElementById('dy-fire-user-select-count');
+		const badgeEl   = document.getElementById('dy-fire-user-select-loading-badge');
+		const listEl    = document.getElementById('dy-fire-user-list-container');
+		const closeBtn  = document.getElementById('dy-fire-user-select-close');
+		const selAllBtn = document.getElementById('dy-fire-select-all');
+		const deselBtn  = document.getElementById('dy-fire-deselect-all');
+		const addBtn    = document.getElementById('dy-fire-user-select-add');
 		const cancelBtn = document.getElementById('dy-fire-user-select-cancel');
-		const closeBtn = document.getElementById('dy-fire-user-select-close');
 
-		selectAllBtn.addEventListener('click', function() {
-			const checkboxes = userSelectPanel.querySelectorAll('.user-checkbox');
-			checkboxes.forEach(checkbox => {
-				checkbox.checked = true;
+		// 当前面板已展示的条目总数
+		let totalCount = 0;
+
+		// 追加新行到列表
+		const appendRows = (nicknames) => {
+			const n2id = nicknameToUserId();
+			const frag = document.createDocumentFragment();
+			nicknames.forEach(nickname => {
+				const userId = n2id[nickname];
+				const isGroup = !userId;
+				// value 统一存昵称，user_id 通过 data-user-id 附带（用于 nicknameUserIdMap）
+				const isChecked = currentTargetUsers.includes(nickname);
+				const safeNickname = escapeHtml(nickname);
+				const safeUserId = userId ? escapeHtml(userId) : '';
+				const badge = isGroup
+					? `<span style="font-size: 11px; color: #999; margin-left: 8px; padding: 2px 6px; background: rgba(255,255,255,0.08); border-radius: 4px;">群聊</span>`
+					: '';
+				const row = document.createElement('div');
+				row.style.cssText = 'padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05);';
+				row.innerHTML = `
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" class="user-checkbox" value="${safeNickname}" ${safeUserId ? `data-user-id="${safeUserId}"` : ''} ${isChecked ? 'checked' : ''} style="margin-right: 10px;">
+                        <span style="color: #fff; font-size: 14px;">${safeNickname}</span>${badge}
+                    </label>`;
+				frag.appendChild(row);
+				totalCount++;
 			});
-		});
+			listEl.appendChild(frag);
+			if (countEl) countEl.textContent = `(${totalCount})`;
+		};
 
-		deselectAllBtn.addEventListener('click', function() {
-			const checkboxes = userSelectPanel.querySelectorAll('.user-checkbox');
-			checkboxes.forEach(checkbox => {
-				checkbox.checked = false;
-			});
-		});
+		// 滚动结束后去掉加载提示
+		const onDone = () => {
+			if (badgeEl) badgeEl.remove();
+			if (countEl) countEl.textContent = `(${totalCount})`;
+		};
 
-		addBtn.addEventListener('click', function() {
-			const checkboxes = userSelectPanel.querySelectorAll('.user-checkbox');
-			const selectedUsers = [];
+		// 绑定按钮事件
+		closeBtn.addEventListener('click', () => userSelectPanel.remove());
+		closeBtn.addEventListener('mouseenter', () => { closeBtn.style.background = 'rgba(255,255,255,0.2)'; closeBtn.style.transform = 'scale(1.1)'; });
+		closeBtn.addEventListener('mouseleave', () => { closeBtn.style.background = 'rgba(255,255,255,0.1)'; closeBtn.style.transform = 'scale(1)'; });
 
-			checkboxes.forEach(checkbox => {
-				if (checkbox.checked) {
-					selectedUsers.push(checkbox.value);
+		selAllBtn.addEventListener('click', () => userSelectPanel.querySelectorAll('.user-checkbox').forEach(cb => cb.checked = true));
+		deselBtn.addEventListener('click',  () => userSelectPanel.querySelectorAll('.user-checkbox').forEach(cb => cb.checked = false));
+
+		addBtn.addEventListener('click', () => {
+			const selected = [];
+			// 读取旧的映射并更新（保留手动输入条目，覆盖面板选择的条目）
+			const nicknameUserIdMap = GM_getValue('nicknameUserIdMap', {});
+			userSelectPanel.querySelectorAll('.user-checkbox').forEach(cb => {
+				if (cb.checked) {
+					const nickname = cb.value;
+					selected.push(nickname);
+					const userId = cb.dataset.userId;
+					if (userId) nicknameUserIdMap[nickname] = userId; // 建立改名追踪映射
 				}
 			});
-
-			userConfig.targetUsernames = selectedUsers.join('\n');
+			GM_setValue('nicknameUserIdMap', nicknameUserIdMap);
+			userConfig.targetUsernames = selected.join('\n');
 			saveConfig();
 			parseTargetUsers();
 			updateUserStatusDisplay();
-
-			if (selectedUsers.length > 0) {
-				addHistoryLog(`已更新 ${selectedUsers.length} 个目标用户`, 'success');
-			} else {
-				addHistoryLog('已清空目标用户列表', 'info');
-			}
-
+			addHistoryLog(selected.length > 0 ? `已更新 ${selected.length} 个目标用户` : '已清空目标用户列表', selected.length > 0 ? 'success' : 'info');
 			userSelectPanel.remove();
 		});
+		cancelBtn.addEventListener('click', () => userSelectPanel.remove());
 
-		cancelBtn.addEventListener('click', function() {
-			userSelectPanel.remove();
-		});
-
-		closeBtn.addEventListener('click', function() {
-			userSelectPanel.remove();
+		[selAllBtn, deselBtn, addBtn, cancelBtn].forEach(btn => {
+			btn.addEventListener('mouseenter', () => btn.style.transform = 'translateY(-2px)');
+			btn.addEventListener('mouseleave', () => btn.style.transform = 'translateY(0)');
 		});
 
-		[selectAllBtn, deselectAllBtn, addBtn, cancelBtn].forEach(btn => {
-			btn.addEventListener('mouseenter', function() {
-				this.style.transform = 'translateY(-2px)';
-			});
-			btn.addEventListener('mouseleave', function() {
-				this.style.transform = 'translateY(0)';
-			});
-		});
-
-		closeBtn.addEventListener('mouseenter', function() {
-			this.style.background = 'rgba(255,255,255,0.2)';
-			this.style.transform = 'scale(1.1)';
-		});
-		closeBtn.addEventListener('mouseleave', function() {
-			this.style.background = 'rgba(255,255,255,0.1)';
-			this.style.transform = 'scale(1)';
-		});
+		// 启动增量滚动收集
+		autoScrollChatListAndCollect(userSelectPanel, appendRows, onDone);
 	}
 
 	// 修改火花天数
@@ -2333,30 +2522,35 @@
 			e.preventDefault();
 		});
 
-		document.addEventListener('mousemove', function(e) {
-			if (!isDragging || !currentPanel) return;
+		// 全局 mousemove/mouseup 只绑定一次
+		if (!dragListenersAttached) {
+			dragListenersAttached = true;
 
-			const x = e.clientX - dragOffsetX;
-			const y = e.clientY - dragOffsetY;
+			document.addEventListener('mousemove', function(e) {
+				if (!isDragging || !currentPanel) return;
 
-			const maxX = window.innerWidth - currentPanel.offsetWidth;
-			const maxY = window.innerHeight - currentPanel.offsetHeight;
+				const x = e.clientX - dragOffsetX;
+				const y = e.clientY - dragOffsetY;
 
-			currentPanel.style.left = Math.max(0, Math.min(x, maxX)) + 'px';
-			currentPanel.style.right = 'auto';
-			currentPanel.style.top = Math.max(0, Math.min(y, maxY)) + 'px';
-		});
+				const maxX = window.innerWidth - currentPanel.offsetWidth;
+				const maxY = window.innerHeight - currentPanel.offsetHeight;
 
-		document.addEventListener('mouseup', function() {
-			if (isDragging) {
-				isDragging = false;
-				if (currentPanel) {
-					currentPanel.style.transition = 'all 0.3s ease';
+				currentPanel.style.left = Math.max(0, Math.min(x, maxX)) + 'px';
+				currentPanel.style.right = 'auto';
+				currentPanel.style.top = Math.max(0, Math.min(y, maxY)) + 'px';
+			});
+
+			document.addEventListener('mouseup', function() {
+				if (isDragging) {
+					isDragging = false;
+					if (currentPanel) {
+						currentPanel.style.transition = 'all 0.3s ease';
+					}
+					currentPanel = null;
+					document.body.style.userSelect = '';
 				}
-				currentPanel = null;
-				document.body.style.userSelect = '';
-			}
-		});
+			});
+		}
 	}
 
 	// 创建重新打开面板的按钮
@@ -3266,97 +3460,12 @@
 		startRetryResetTimer();
 
 		setInterval(() => {
-			const now = new Date();
-			const today = new Date().toDateString();
-			const lastSentDate = GM_getValue('lastSentDate', '');
-
-			if (userConfig.enableTargetUser && allTargetUsers.length > 0) {
-				const unsentUsers = allTargetUsers.filter(user => !sentUsersToday.includes(user));
-				if (unsentUsers.length > 0) {
-					if (userConfig.sendTimeRandom) {
-						const [startHour, startMinute] = userConfig.sendTimeRangeStart.split(':').map(Number);
-						const [endHour, endMinute] = userConfig.sendTimeRangeEnd.split(':').map(Number);
-
-						const nowMinutes = now.getHours() * 60 + now.getMinutes();
-						const startMinutes = startHour * 60 + startMinute;
-						const endMinutes = endHour * 60 + endMinute;
-
-						let isInRange = false;
-						if (endMinutes > startMinutes) {
-							isInRange = nowMinutes >= startMinutes && nowMinutes <= endMinutes;
-						} else {
-							isInRange = nowMinutes >= startMinutes || nowMinutes <= endMinutes;
-						}
-
-						if (isInRange && !isProcessing) {
-							const shouldSend = checkIfShouldSendNow();
-							if (shouldSend) {
-								addHistoryLog('定时任务触发发送（随机时间模式）', 'info');
-								sendMessage();
-							}
-						}
-					} else {
-						const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
-						if (now.getHours() === targetHour &&
-							now.getMinutes() === targetMinute &&
-							now.getSeconds() === (targetSecond || 0)) {
-
-							const shouldSend = checkIfShouldSendNow();
-							if (shouldSend) {
-								addHistoryLog('定时任务触发发送（固定时间模式）', 'info');
-								sendMessage();
-							}
-						}
-					}
-				}
-			} else {
-				if (lastSentDate !== today) {
-					if (userConfig.sendTimeRandom) {
-						const [startHour, startMinute] = userConfig.sendTimeRangeStart.split(':').map(Number);
-						const [endHour, endMinute] = userConfig.sendTimeRangeEnd.split(':').map(Number);
-
-						const nowMinutes = now.getHours() * 60 + now.getMinutes();
-						const startMinutes = startHour * 60 + startMinute;
-						const endMinutes = endHour * 60 + endMinute;
-
-						let isInRange = false;
-						if (endMinutes > startMinutes) {
-							isInRange = nowMinutes >= startMinutes && nowMinutes <= endMinutes;
-						} else {
-							isInRange = nowMinutes >= startMinutes || nowMinutes <= endMinutes;
-						}
-
-						if (isInRange && !isProcessing) {
-							addHistoryLog('定时任务触发发送（随机时间模式）', 'info');
-							sendMessage();
-						}
-					} else {
-						const [targetHour, targetMinute, targetSecond] = userConfig.sendTime.split(':').map(Number);
-						if (now.getHours() === targetHour &&
-							now.getMinutes() === targetMinute &&
-							now.getSeconds() === (targetSecond || 0)) {
-
-							addHistoryLog('定时任务触发发送（固定时间模式）', 'info');
-							sendMessage();
-						}
-					}
-				}
-			}
+			autoSendIfNeeded();
 		}, 1000);
 	}
 
-	// 检查当前是否应该发送
-	function checkIfShouldSendNow() {
-		const lastSendTimestamp = GM_getValue('lastSendTimestamp', 0);
-		const now = Date.now();
-
-		if (now - lastSendTimestamp < 5 * 60 * 1000) {
-			return false;
-		}
-
-		GM_setValue('lastSendTimestamp', now);
-		return true;
-	}
+	// 尽早执行拦截，捕获页面加载时的 user_detail API 请求
+	interceptUserDetailApi();
 
 	if (document.readyState === 'loading') {
 		document.addEventListener('DOMContentLoaded', init);
