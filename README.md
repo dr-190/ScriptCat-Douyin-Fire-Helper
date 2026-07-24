@@ -1494,7 +1494,7 @@ v2026.07.13 已修复此问题，失败用户自动标记并继续下一用户�
 
 **如果这个项目对您有帮助，请给它一个 ⭐ Star！您的支持是我持续更新的动力。**
 
-[![Star History Chart](https://api.star-history.com/svg?repos=dr-190/ScriptCat-Douyin-Fire-Helper&type=Date)](https://star-history.com/#dr-190/ScriptCat-Douyin-Fire-Helper&Date)
+[![Star History Chart](https://api.star-history.com/chart?repos=dr-190/ScriptCat-Douyin-Fire-Helper&type=date&legend=top-left&sealed_token=vBFKkc3hMtwy9CesRN3mFJ_KQbCX0WhPS5A7Lw7LFAKGMnzfeg7-NkEo_lE9ZKQH9BhLP2CW1WC1gzdnusk-31EN3iyNhKBdyslUhE92C3vzdHpmdp0Yew)](https://www.star-history.com/?repos=dr-190%2FScriptCat-Douyin-Fire-Helper&type=date&legend=top-left)
 
 ![Last Commit](https://img.shields.io/github/last-commit/dr-190/ScriptCat-Douyin-Fire-Helper)
 ![Commit Activity](https://img.shields.io/github/commit-activity/m/dr-190/ScriptCat-Douyin-Fire-Helper)
