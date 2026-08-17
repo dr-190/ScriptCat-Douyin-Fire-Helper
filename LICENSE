@@ -1,6 +1,12 @@
 MIT License
 
-Copyright (c) 2025 飔梦
+Copyright (c) 2026 dr-190
+Copyright (c) 2026 YsKiKi
+
+Portions of this software (scheduler callback components:
+callback_server.py, scheduler.ps1, scheduler.sh, config.json
+structure, and notifyScriptB function) are
+Copyright (c) 2026 YsKiKi, used under the MIT License.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

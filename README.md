@@ -1103,7 +1103,7 @@ ScriptCat-Douyin-Fire-Helper/
 - **📱 Chat 页面全面支持**：完整支持 `https://www.douyin.com/chat*`，专用搜索、换行输入（Shift+Enter）、自动读取火花天数
 - **⏸️ 暂停/继续控制**：随时暂停或恢复自动发送，状态持久化保存
 - **👤 用户火花天数独立记录**：每位好友独立记录天数，消息模板自动替换，新增「清空天数」按钮
-- **🔗 后端调度器回调集成**：任务完成自动通知调度器，支持 success/all_failed/partial 状态
+- **🔗 后端调度器回调集成**：任务完成自动通知调度器，支持 success/all_failed/partial 状态（合并自 [@YsKiKi](https://github.com/YsKiKi) 的独立 fork [YsKiKi/ScriptCat-Douyin-Fire-Helper](https://github.com/YsKiKi/ScriptCat-Douyin-Fire-Helper)）
 - **🔄 多用户失败处理优化**：新增 `failedUsersToday` 数组，单用户失败后自动切换下一用户
 - **⏱️ 初始加载延迟配置**：默认 30 秒延迟启动，避免页面未完全加载
 - **🔧 Chat 页面换行分隔符**：自动将换行符替换为自定义分隔符（默认 ` | `）
@@ -1463,11 +1463,11 @@ v2026.07.13 已修复此问题，失败用户自动标记并继续下一用户�
 - [DeepSeek](https://www.deepseek.com/) - 提供 AI 辅助开发支持
 - [所有贡献者](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/graphs/contributors)
 
-### 特别感谢（按贡献时间排序）
+### 特别感谢
 
 - **@dr-190** - 项目创建者和主要维护者
-- **@YsKiKi** - 好友改名检测和虚拟列表优化
-- **@iEastBlues** - Chat 页面支持和调度器集成
+- **@YsKiKi** - 好友改名检测、虚拟列表优化、调度器回调功能（fork 独立开发，后由本项目合并）
+- **[iEastBlues](https://scriptcat.org/zh-CN/users/197288)**（ScriptCat 平台） - Chat 页面支持
 - [所有提交 PR 的贡献者](https://github.com/dr-190/ScriptCat-Douyin-Fire-Helper/pulls)
 
 ---

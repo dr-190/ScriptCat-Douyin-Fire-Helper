@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# Copyright (c) 2026 YsKiKi (https://github.com/YsKiKi)
+# SPDX-License-Identifier: MIT
+# 调度器回调服务器 - 由 YsKiKi 独立开发，后合并至本项目
 """
 抖音续火助手 - HTTP 回调监听服务器
 监听浏览器执行脚本 (UserScript) 发送的完成信号。
