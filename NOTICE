@@ -1,0 +1,9 @@
+This project includes components originally developed by YsKiKi:
+
+- callback_server.py
+- scheduler.ps1
+- scheduler.sh
+- config.json structure
+- notifyScriptB function
+
+Copyright (c) 2026 YsKiKi. Used under the MIT License.
